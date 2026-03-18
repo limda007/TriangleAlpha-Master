@@ -5,11 +5,12 @@ import sys
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
-
-from qfluentwidgets import FluentIcon as FIF, FluentWindow, NavigationItemPosition
+from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import FluentWindow, NavigationItemPosition
 
 from master.app.common.config import cfg
 from master.app.core.account_pool import AccountPool
+from master.app.core.log_receiver import LogReceiverThread
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 from master.app.core.udp_listener import UdpListenerThread
@@ -31,6 +32,7 @@ class MainWindow(FluentWindow):
         self.accountPool = AccountPool(self)
         self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
+        self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
 
         # 页面
         self.dashboardInterface = DashboardInterface(self.nodeManager, self.accountPool, self)
@@ -38,6 +40,7 @@ class MainWindow(FluentWindow):
         self.accountInterface = AccountInterface(self.accountPool, self)
         self.historyInterface = HistoryInterface(self.nodeManager, self)
         self.logInterface = LogInterface(self)
+        self.logInterface.set_receiver(self.logReceiver)
         self.settingInterface = SettingInterface(self)
 
         self._initWindow()
@@ -45,6 +48,7 @@ class MainWindow(FluentWindow):
 
         # 启动
         self.udpListener.start()
+        self.logReceiver.start()
         self._timeoutTimer = QTimer(self)
         self._timeoutTimer.timeout.connect(self.nodeManager.check_timeouts)
         self._timeoutTimer.start(5000)
@@ -78,6 +82,7 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, e):
         self.udpListener.stop()
+        self.logReceiver.stop()
         super().closeEvent(e)
 
     def _fixMacOSTitleBar(self) -> None:

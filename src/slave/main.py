@@ -8,6 +8,7 @@ from pathlib import Path
 from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
 from slave.command_handler import CommandHandler
 from slave.heartbeat import HeartbeatService
+from slave.log_reporter import LogReporter
 
 
 def _get_base_dir() -> Path:
@@ -45,16 +46,21 @@ async def _main() -> None:
     # 核心服务
     heartbeat = HeartbeatService(master_ip=master_ip)
     handler = CommandHandler(str(base_dir))
+    log_reporter = LogReporter(master_ip, heartbeat.machine_name)
+
+    # 安装日志拦截（stdout → TCP 上报）
+    log_reporter.install()
 
     # 分组变更回调
     handler.set_group_callback(heartbeat.set_group)
 
-    print("[就绪] 心跳间隔 3s，TCP 监听 9999")
+    print("[就绪] 心跳间隔 3s，TCP 监听 9999，日志上报已启用")
     print()
 
     await asyncio.gather(
         heartbeat.run(),
         handler.run(),
+        log_reporter.run(),
         kill_remote_controls(base_dir),
     )
 
