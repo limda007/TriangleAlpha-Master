@@ -1,6 +1,7 @@
 """应用配置"""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from qfluentwidgets import (
@@ -15,7 +16,17 @@ from qfluentwidgets import (
     qconfig,
 )
 
-RESOURCE_DIR = Path(__file__).parent.parent / "resource"
+
+def _get_resource_dir() -> Path:
+    """兼容 PyInstaller onefile 和源码两种模式"""
+    # PyInstaller 解压目录
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / "master" / "app" / "resource"
+    return Path(__file__).parent.parent / "resource"
+
+
+RESOURCE_DIR = _get_resource_dir()
 CONFIG_DIR = Path.home() / ".triangle-alpha"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
