@@ -90,8 +90,11 @@ class TcpCommand(enum.Enum):
     REBOOT_PC = "REBOOTPC"
     UPDATE_KEY = "UPDATEKEY"
     DELETE_FILE = "DELETEFILE"
-    EXT_QUERY = "EXT_QUERY"
     EXT_SET_GROUP = "EXT_SETGROUP"
+    # H5: 文件传输协议补充定义
+    SENDFILE_START = "SENDFILE_START"
+    SENDFILE_CHUNK = "SENDFILE_CHUNK"
+    SENDFILE_END = "SENDFILE_END"
 
 
 def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:

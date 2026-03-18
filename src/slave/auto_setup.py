@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -42,11 +43,19 @@ def check_rename(base_dir: Path) -> None:
         target = files[0].stem.replace("机器编号-", "").strip()
         if not target:
             return
+        # M10: 白名单校验，仅允许字母数字、连字符、下划线
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9\-_]+", target):
+            print(f"[改名] 拒绝非法字符: {target}")
+            return
         if platform.node().lower() == target.lower():
             return
         print(f"[改名] 发现标识: {files[0].name} → {target}")
-        # 需管理员权限
-        os.system(f'wmic computersystem where name="%COMPUTERNAME%" rename {target}')  # noqa: S605
+        subprocess.run(  # noqa: S603
+            ["wmic", "computersystem", "where", f'name="{platform.node()}"', "rename", target],
+            shell=False,
+            check=False,
+        )
         print("[改名] 已提交，需重启生效")
     except Exception as e:
         print(f"[改名] 异常: {e}")
@@ -72,7 +81,7 @@ async def kill_remote_controls(base_dir: Path) -> None:
         for proc in psutil.process_iter(["name"]):
             try:
                 pname = proc.info.get("name", "")
-                if pname and pname.lower().startswith(name.lower()):
+                if pname and pname.lower() == name.lower() + ".exe":
                     proc.kill()
                     killed += 1
                     print(f"[查杀] {pname}")

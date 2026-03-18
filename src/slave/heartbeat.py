@@ -5,6 +5,7 @@ import asyncio
 import os
 import platform
 import socket
+from collections.abc import Callable
 
 import psutil
 
@@ -19,6 +20,7 @@ class HeartbeatService:
         master_ip: str | None = None,
         port: int = UDP_PORT,
         interval: int = HEARTBEAT_INTERVAL,
+        on_sent: Callable[[int, float, float], None] | None = None,
     ):
         self._master_ip = master_ip
         self._port = port
@@ -27,6 +29,8 @@ class HeartbeatService:
         self._user_name = os.getenv("USERNAME", os.getenv("USER", "unknown"))
         self._group = "默认"
         self._running = False
+        self._on_sent = on_sent
+        self._beat_count = 0
 
     @property
     def machine_name(self) -> str:
@@ -37,38 +41,51 @@ class HeartbeatService:
 
     async def run(self) -> None:
         self._running = True
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setblocking(False)
-        loop = asyncio.get_event_loop()
+        # H2: 使用 with 管理 socket，CancelledError 时也能正确关闭
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setblocking(False)
+            # M1: 使用 get_running_loop() 替代已弃用的 get_event_loop()
+            loop = asyncio.get_running_loop()
+            consecutive_errors = 0
 
-        while self._running:
             try:
-                cpu = psutil.cpu_percent(interval=0)
-                mem = psutil.virtual_memory().percent
-                msg = build_udp_ext_online(
-                    self._machine_name,
-                    self._user_name,
-                    cpu,
-                    mem,
-                    SLAVE_VERSION,
-                    self._group,
-                )
-                data = msg.encode("utf-8")
-                target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
-                await loop.sock_sendto(sock, data, target)
-            except Exception:
-                pass
-            await asyncio.sleep(self._interval)
-
-        # 发送离线通知
-        try:
-            offline = build_udp_offline(self._machine_name).encode("utf-8")
-            target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
-            await loop.sock_sendto(sock, offline, target)
-        except Exception:
-            pass
-        sock.close()
+                while self._running:
+                    try:
+                        cpu = psutil.cpu_percent(interval=0)
+                        mem = psutil.virtual_memory().percent
+                        msg = build_udp_ext_online(
+                            self._machine_name,
+                            self._user_name,
+                            cpu,
+                            mem,
+                            SLAVE_VERSION,
+                            self._group,
+                        )
+                        data = msg.encode("utf-8")
+                        target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
+                        await loop.sock_sendto(sock, data, target)
+                        self._beat_count += 1
+                        if self._on_sent:
+                            self._on_sent(self._beat_count, cpu, mem)
+                        consecutive_errors = 0
+                    except Exception as e:
+                        consecutive_errors += 1
+                        print(f"[心跳] 发送失败 (连续第 {consecutive_errors} 次): {e}")
+                        if consecutive_errors >= 10:
+                            print("[心跳] 连续失败过多，等待 30 秒后重试")
+                            await asyncio.sleep(30)
+                            consecutive_errors = 0
+                    await asyncio.sleep(self._interval)
+            finally:
+                # 发送离线通知（尽力而为）
+                try:
+                    sock.setblocking(True)
+                    offline = build_udp_offline(self._machine_name).encode("utf-8")
+                    target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
+                    sock.sendto(offline, target)
+                except Exception:
+                    pass
 
     def stop(self) -> None:
         self._running = False
