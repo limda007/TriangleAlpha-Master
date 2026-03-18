@@ -46,13 +46,20 @@ class SlaveWindow(QWidget):
         self.setWindowTitle(f"TA-Slave | {self._machine_name}")
         self.setFixedSize(420, 380)
 
+        # 强制背景填充，修复 PyInstaller onefile 渲染空白
+        self.setAutoFillBackground(True)
+        self.setStyleSheet(
+            "SlaveWindow { background-color: #f5f5f5; }"
+            "QLabel { color: #333; }"
+        )
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(5)
 
         # 标题行
         title = QLabel(f"<b>TA-Slave</b> | {self._machine_name}")
-        title.setStyleSheet("font-size: 14px;")
+        title.setStyleSheet("font-size: 14px; color: #111;")
         layout.addWidget(title)
 
         # 主控 + 分组
