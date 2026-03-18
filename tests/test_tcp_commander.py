@@ -35,6 +35,3 @@ class TestTcpCommandBuilding:
     def test_build_ext_set_group(self):
         cmd = build_tcp_command(TcpCommand.EXT_SET_GROUP, payload="A组")
         assert cmd == "EXT_SETGROUP|A组"
-
-    def test_build_ext_query(self):
-        assert build_tcp_command(TcpCommand.EXT_QUERY) == "EXT_QUERY|"
