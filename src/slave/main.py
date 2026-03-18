@@ -1,19 +1,22 @@
-"""被控端入口"""
+"""被控端入口 — PyQt6 GUI + asyncio 后台服务"""
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 
-from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
-from slave.command_handler import CommandHandler
-from slave.heartbeat import HeartbeatService
-from slave.log_reporter import LogReporter
+from PyQt6.QtWidgets import QApplication
+
+from slave.backend import SlaveBackend
+from slave.slave_window import SlaveWindow
 
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
+    # 源码模式: 优先使用 CWD（运维通常 cd 到部署目录再启动）
+    cwd = Path.cwd()
+    if (cwd / "TestDemo.exe").exists() or (cwd / "主控IP.txt").exists() or (cwd / "master.txt").exists():
+        return cwd
     return Path(__file__).parent
 
 
@@ -28,48 +31,32 @@ def _read_master_ip(base_dir: Path) -> str | None:
     return None
 
 
-async def _main() -> None:
+def main() -> None:
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # 托盘模式
+
     base_dir = _get_base_dir()
     master_ip = _read_master_ip(base_dir)
 
-    print("=" * 50)
-    print("  TriangleAlpha 被控端 v2.0.0")
-    print("=" * 50)
-    print(f"  目录: {base_dir}")
-    print(f"  主控: {master_ip or '广播模式'}")
-    print()
+    window = SlaveWindow(base_dir, master_ip)
+    backend = SlaveBackend(base_dir, master_ip)
 
-    # 自动配置
-    setup_startup()
-    check_rename(base_dir)
+    # 信号 → GUI 槽
+    backend.heartbeat_sent.connect(window.on_heartbeat)
+    backend.command_received.connect(window.on_command)
+    backend.account_updated.connect(window.on_account_updated)
+    backend.script_status.connect(window.on_script_status)
+    backend.group_changed.connect(window.on_group_changed)
+    backend.log_entry.connect(window.append_log)
+    backend.error_occurred.connect(window.append_log)
 
-    # 核心服务
-    heartbeat = HeartbeatService(master_ip=master_ip)
-    handler = CommandHandler(str(base_dir))
-    log_reporter = LogReporter(master_ip, heartbeat.machine_name)
+    backend.start()
+    window.show()
 
-    # 安装日志拦截（stdout → TCP 上报）
-    log_reporter.install()
-
-    # 分组变更回调
-    handler.set_group_callback(heartbeat.set_group)
-
-    print("[就绪] 心跳间隔 3s，TCP 监听 9999，日志上报已启用")
-    print()
-
-    await asyncio.gather(
-        heartbeat.run(),
-        handler.run(),
-        log_reporter.run(),
-        kill_remote_controls(base_dir),
-    )
-
-
-def main() -> None:
-    try:
-        asyncio.run(_main())
-    except KeyboardInterrupt:
-        print("\n[退出] 正在关闭...")
+    exit_code = app.exec()
+    backend.stop()
+    backend.wait(5000)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
