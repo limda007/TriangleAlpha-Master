@@ -33,9 +33,9 @@ from qfluentwidgets import (
 from master.app.components.stat_card import StatCard
 from master.app.core.account_pool import AccountPool
 
-_HEADERS = ["账号", "密码", "状态", "分配机器", "等级", "完成时间"]
+_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "完成时间"]
 _MASK = "••••••••"
-_SECRET_COL = 1  # password column
+_SECRET_COLS = {1, 3}  # password + email password columns
 
 
 class AccountInterface(ScrollArea):
@@ -98,7 +98,7 @@ class AccountInterface(ScrollArea):
         emptyLayout = QVBoxLayout(self.emptyLabel)
         emptyLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         emptyLayout.addWidget(SubtitleLabel("暂无账号数据"))
-        tip = BodyLabel("点击「导入账号」加载 accounts.txt 文件（格式: 用户名----密码）")
+        tip = BodyLabel("点击「导入账号」加载 accounts.txt（格式: 账号----密码----邮箱----邮箱密码----[备注]）")
         tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         emptyLayout.addWidget(tip)
         self.mainLayout.addWidget(self.emptyLabel)
@@ -121,14 +121,20 @@ class AccountInterface(ScrollArea):
         self.table.setRowCount(len(accounts))
         for row, acc in enumerate(accounts):
             self.table.setItem(row, 0, QTableWidgetItem(acc.username))
+            # 密码列（掩码）
             pwd_item = QTableWidgetItem(_MASK)
             pwd_item.setData(Qt.ItemDataRole.UserRole, acc.password)
             self.table.setItem(row, 1, pwd_item)
-            self.table.setItem(row, 2, QTableWidgetItem(acc.status.value))
-            self.table.setItem(row, 3, QTableWidgetItem(acc.assigned_machine))
-            self.table.setItem(row, 4, QTableWidgetItem(str(acc.level) if acc.level else ""))
+            self.table.setItem(row, 2, QTableWidgetItem(acc.bind_email))
+            # 邮箱密码列（掩码）
+            epwd_item = QTableWidgetItem(_MASK if acc.bind_email_password else "")
+            epwd_item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
+            self.table.setItem(row, 3, epwd_item)
+            self.table.setItem(row, 4, QTableWidgetItem(acc.status.value))
+            self.table.setItem(row, 5, QTableWidgetItem(acc.assigned_machine))
+            self.table.setItem(row, 6, QTableWidgetItem(str(acc.level) if acc.level else ""))
             time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
-            self.table.setItem(row, 5, QTableWidgetItem(time_str))
+            self.table.setItem(row, 7, QTableWidgetItem(time_str))
         self._refreshStats()
         self._applyFilter()
         self.emptyLabel.setVisible(len(accounts) == 0)
@@ -141,7 +147,7 @@ class AccountInterface(ScrollArea):
         self.completedCard.setValue(str(self._pool.completed_count))
 
     def _onCellClicked(self, row: int, col: int) -> None:
-        if col != _SECRET_COL:
+        if col not in _SECRET_COLS:
             return
         item = self.table.item(row, col)
         if not item:
@@ -159,7 +165,7 @@ class AccountInterface(ScrollArea):
         status_map = {"空闲": "空闲", "使用中": "使用中", "已完成": "已完成"}
         target = status_map.get(status_text)
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 2)
+            item = self.table.item(row, 4)  # 状态列
             if target is None or (item and item.text() == target):
                 self.table.setRowHidden(row, False)
             else:

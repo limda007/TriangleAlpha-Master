@@ -72,12 +72,18 @@ class AccountPool(QObject):
     # ── 导出 ───────────────────────────────────────────────
 
     def export_completed(self) -> str:
-        """导出已完成账号为文本，格式: username----password  等级:N  完成时间:MM-DD HH:MM"""
+        """导出已完成账号，对齐原版 9 字段格式:
+        账号----密码----邮箱----邮箱密码----等级----金币----状态----登录时间----登出时间
+        """
         lines = []
         for acc in self.accounts:
             if acc.status == AccountStatus.COMPLETED:
-                time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
-                lines.append(f"{acc.username}----{acc.password}  等级:{acc.level}  完成时间:{time_str}")
+                time_str = acc.completed_at.strftime("%Y-%m-%d %H:%M:%S") if acc.completed_at else "无"
+                lines.append(
+                    f"{acc.username}----{acc.password}----{acc.bind_email}----"
+                    f"{acc.bind_email_password}----{acc.level}----{acc.jin_bi}----"
+                    f"正常----无----{time_str}"
+                )
         return "\n".join(lines)
 
     # ── 统计属性 ───────────────────────────────────────────

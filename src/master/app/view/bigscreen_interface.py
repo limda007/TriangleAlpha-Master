@@ -273,7 +273,7 @@ class BigScreenInterface(ScrollArea):
         self.accountEdit = PlainTextEdit(panel)
         self.accountEdit.setObjectName("accountEdit")
         self.accountEdit.setPlaceholderText(
-            "粘贴账号，每行一个，格式: 用户名----密码"
+            "粘贴账号，每行一个\n格式: 账号----密码----邮箱----邮箱密码----[备注]"
         )
         self.accountEdit.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -426,10 +426,7 @@ class BigScreenInterface(ScrollArea):
         if self._syncing:
             return
         self._syncing = True
-        lines = []
-        for acc in self._pool.accounts:
-            line = f"{acc.username}----{acc.password}" if acc.password else acc.username
-            lines.append(line)
+        lines = [acc.to_line() for acc in self._pool.accounts]
         self.accountEdit.setPlainText("\n".join(lines))
         self._syncing = False
 
