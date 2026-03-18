@@ -153,6 +153,9 @@ class NodeManager(QObject):
         node.status = msg.state if msg.state else node.status
         node.level = msg.level
         node.jin_bi = msg.jin_bi
+        # desc 字段携带当前挂机的游戏账号名
+        if msg.desc:
+            node.current_account = msg.desc
         node.last_seen = datetime.now()
         node.last_status_update = datetime.now()
         self.node_updated.emit(name)

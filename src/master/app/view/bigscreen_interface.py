@@ -371,7 +371,7 @@ class BigScreenInterface(ScrollArea):
             None,  # col 0 已处理
             node.machine_name,
             node.ip,
-            node.user_name or "--",
+            node.current_account or "--",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
             node.status,
