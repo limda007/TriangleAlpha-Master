@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from common.models import NodeInfo, OperationRecord
 from common.protocol import DISCONNECT_TIMEOUT, OFFLINE_TIMEOUT, UdpMessage, UdpMessageType
+
+_MAX_HISTORY = 1000
 
 
 class NodeManager(QObject):
@@ -23,6 +25,15 @@ class NodeManager(QObject):
         super().__init__(parent)
         self.nodes: dict[str, NodeInfo] = {}
         self.history: list[OperationRecord] = []
+        # P0: 缓存在线/总数，避免每次遍历
+        self._online_count = 0
+        self._total_count = 0
+        # P0: stats_changed 信号防抖 200ms，合并批量 STATUS 消息
+        self._stats_dirty = False
+        self._stats_timer = QTimer(self)
+        self._stats_timer.setSingleShot(True)
+        self._stats_timer.setInterval(200)
+        self._stats_timer.timeout.connect(self._flush_stats)
 
     # ── 公开接口 ───────────────────────────────────────────
 
@@ -54,10 +65,11 @@ class NodeManager(QObject):
                     self.node_offline.emit(node.machine_name)
                     changed = True
         if changed:
-            self.stats_changed.emit()
+            self._recalc_online()
+            self._schedule_stats()
 
     def add_history(self, op_type: str, target: str, detail: str = "", result: str = "") -> None:
-        """追加操作记录"""
+        """追加操作记录（上限 _MAX_HISTORY 条，超出丢弃最旧的）"""
         record = OperationRecord(
             timestamp=datetime.now(),
             op_type=op_type,
@@ -66,6 +78,8 @@ class NodeManager(QObject):
             result=result,
         )
         self.history.append(record)
+        if len(self.history) > _MAX_HISTORY:
+            self.history = self.history[-_MAX_HISTORY:]
         self.history_changed.emit()
 
     def get_nodes_by_group(self, group: str) -> list[NodeInfo]:
@@ -76,11 +90,28 @@ class NodeManager(QObject):
 
     @property
     def online_count(self) -> int:
-        return sum(1 for n in self.nodes.values() if n.status not in ("离线", "断连"))
+        return self._online_count
 
     @property
     def total_count(self) -> int:
-        return len(self.nodes)
+        return self._total_count
+
+    def _recalc_online(self) -> None:
+        """重新计算在线数（仅在节点上下线时调用）"""
+        self._online_count = sum(1 for n in self.nodes.values() if n.status not in ("离线", "断连"))
+        self._total_count = len(self.nodes)
+
+    def _schedule_stats(self) -> None:
+        """标记统计脏位，QTimer 200ms 防抖后批量发射 stats_changed"""
+        self._stats_dirty = True
+        if not self._stats_timer.isActive():
+            self._stats_timer.start()
+
+    def _flush_stats(self) -> None:
+        """防抖触发：发射 stats_changed 信号"""
+        if self._stats_dirty:
+            self._stats_dirty = False
+            self.stats_changed.emit()
 
     @property
     def groups(self) -> list[str]:
@@ -105,7 +136,8 @@ class NodeManager(QObject):
         if is_new:
             self.node_online.emit(name)
         self.node_updated.emit(name)
-        self.stats_changed.emit()
+        self._recalc_online()
+        self._schedule_stats()
 
     def _handle_ext_online(self, msg: UdpMessage, remote_ip: str) -> None:
         name = msg.machine_name
@@ -133,7 +165,8 @@ class NodeManager(QObject):
         if is_new:
             self.node_online.emit(name)
         self.node_updated.emit(name)
-        self.stats_changed.emit()
+        self._recalc_online()
+        self._schedule_stats()
 
     def _handle_offline(self, msg: UdpMessage, _remote_ip: str) -> None:
         name = msg.machine_name
@@ -141,7 +174,8 @@ class NodeManager(QObject):
             self.nodes[name].status = "离线"
             self.node_offline.emit(name)
             self.node_updated.emit(name)
-            self.stats_changed.emit()
+            self._recalc_online()
+            self._schedule_stats()
 
     def _handle_status(self, msg: UdpMessage, remote_ip: str) -> None:
         name = msg.machine_name
@@ -159,4 +193,5 @@ class NodeManager(QObject):
         node.last_seen = datetime.now()
         node.last_status_update = datetime.now()
         self.node_updated.emit(name)
-        self.stats_changed.emit()
+        self._recalc_online()
+        self._schedule_stats()

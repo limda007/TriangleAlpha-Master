@@ -1,6 +1,7 @@
 """TCP 指令发送器：通过线程池并发发送 TCP 命令到被控端"""
 from __future__ import annotations
 
+import os
 import socket
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
@@ -39,7 +40,9 @@ class TcpCommander(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._pool: QThreadPool = QThreadPool.globalInstance()  # type: ignore[assignment]
+        # P1: 限制并发连接数，防止线程爆炸
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(min(32, (os.cpu_count() or 4) * 4))
 
     def send(self, ip: str, cmd: TcpCommand, payload: str = "") -> None:
         """发送单条 TCP 命令"""
@@ -53,3 +56,7 @@ class TcpCommander(QObject):
         for ip in ips:
             task = _TcpSendTask(ip, command_str, self)
             self._pool.start(task)
+
+    def stop(self, timeout_ms: int = 3000) -> None:
+        """等待所有发送任务完成并关闭线程池"""
+        self._pool.waitForDone(timeout_ms)

@@ -1,18 +1,16 @@
 """Master 核心组件联调测试 — 验证所有修复项"""
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from common.models import AccountInfo, AccountStatus
-from common.protocol import TcpCommand, build_tcp_command
+from common.models import AccountStatus
+from common.protocol import TcpCommand
 from master.app.core.account_pool import AccountPool
 from master.app.core.node_manager import NodeManager
-
 
 # ── C1: themeMode 配置项 ──
 
@@ -26,6 +24,7 @@ class TestC1ThemeMode:
 
     def test_theme_mode_default_is_auto(self):
         from qfluentwidgets import Theme
+
         from master.app.common.config import cfg
         assert cfg.get(cfg.themeMode) == Theme.AUTO
 
@@ -60,7 +59,7 @@ class TestC3TcpSocketClose:
     """验证 _TcpSendTask 在异常时也关闭 socket"""
 
     def test_socket_closed_on_connect_failure(self):
-        from master.app.core.tcp_commander import _TcpSendTask, TcpCommander
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
 
         commander = MagicMock(spec=TcpCommander)
         commander.command_failed = MagicMock()
@@ -79,7 +78,7 @@ class TestC3TcpSocketClose:
         commander.command_failed.emit.assert_called_once()
 
     def test_socket_closed_on_success(self):
-        from master.app.core.tcp_commander import _TcpSendTask, TcpCommander
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
 
         commander = MagicMock(spec=TcpCommander)
         commander.command_sent = MagicMock()
@@ -204,17 +203,108 @@ class TestM7ExportTimestamp:
         pool.accounts[0].status = AccountStatus.COMPLETED
         pool.accounts[0].level = 30
         pool.accounts[0].completed_at = datetime(2026, 3, 18, 14, 30)
+        pool._rebuild_index()
 
         result = pool.export_completed()
-        assert "完成时间:" in result
-        assert "03-18 14:30" in result
-        assert "等级:30" in result
+        # 导出格式: 账号----密码----邮箱----邮箱密码----等级----金币----状态----登录时间----登出时间
+        assert "2026-03-18 14:30:00" in result
+        assert "----30----" in result
 
     def test_export_without_completed_at(self):
         pool = AccountPool()
         pool.load_from_text("user1----pass1")
         pool.accounts[0].status = AccountStatus.COMPLETED
         pool.accounts[0].completed_at = None
+        pool._rebuild_index()
 
         result = pool.export_completed()
-        assert "完成时间:" in result  # 字段存在，值为空
+        assert "----无" in result  # completed_at=None 时输出 "无"
+
+
+# ── M10-fix: history 上限 ──
+
+
+class TestHistoryCap:
+    """验证 NodeManager.history 不会无限增长"""
+
+    def test_history_capped_at_max(self):
+        nm = NodeManager()
+        for i in range(1200):
+            nm.add_history("操作", f"目标-{i}")
+        assert len(nm.history) <= 1000
+
+    def test_history_preserves_recent(self):
+        nm = NodeManager()
+        for i in range(1100):
+            nm.add_history("操作", f"目标-{i}")
+        # 最新的应保留
+        assert nm.history[-1].target == "目标-1099"
+        # 最早的应被丢弃
+        targets = {r.target for r in nm.history}
+        assert "目标-0" not in targets
+
+
+# ── M11-fix: TcpCommander.stop() ──
+
+
+class TestTcpCommanderShutdown:
+    """验证 TcpCommander 有 stop() 方法并能关闭线程池"""
+
+    def test_stop_method_exists(self):
+        from master.app.core.tcp_commander import TcpCommander
+
+        commander = TcpCommander()
+        assert hasattr(commander, "stop"), "TcpCommander 应有 stop() 方法"
+
+    def test_stop_waits_for_pool(self):
+        from master.app.core.tcp_commander import TcpCommander
+
+        commander = TcpCommander()
+        mock_pool = MagicMock()
+        commander._pool = mock_pool
+
+        commander.stop()
+
+        mock_pool.waitForDone.assert_called_once()
+
+
+# ── M1-fix: LogReceiver 并发处理连接 ──
+
+
+class TestLogReceiverConcurrency:
+    """验证 LogReceiverThread 使用线程池并发处理连接"""
+
+    def test_has_executor_for_concurrent_handling(self):
+        from master.app.core.log_receiver import LogReceiverThread
+
+        receiver = LogReceiverThread(port=0)
+        assert hasattr(receiver, "_executor"), "应有 ThreadPoolExecutor"
+
+    def test_handle_conn_parses_data(self):
+        """验证 _handle_conn 正确解析单个连接的数据"""
+        import socket
+
+        from master.app.core.log_receiver import LogReceiverThread
+
+        receiver = LogReceiverThread(port=0)
+        entries = []
+        receiver.log_received.connect(entries.append)
+
+        # 用 socketpair 模拟连接
+        s1, s2 = socket.socketpair()
+        s1.sendall(b"LOG|VM-X|10:00:00|INFO|test-msg\n")
+        s1.close()
+
+        receiver._handle_conn(s2)
+
+        assert len(entries) == 1
+        assert entries[0].machine_name == "VM-X"
+        assert entries[0].content == "test-msg"
+
+    def test_stop_shuts_down_executor(self):
+        from master.app.core.log_receiver import LogReceiverThread
+
+        receiver = LogReceiverThread(port=0)
+        receiver._running = False  # 不让 run() 真正跑
+        receiver.stop()
+        assert receiver._executor._shutdown

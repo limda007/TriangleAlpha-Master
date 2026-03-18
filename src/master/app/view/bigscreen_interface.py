@@ -89,6 +89,8 @@ class BigScreenInterface(ScrollArea):
         self._pool = account_pool
         self._start_time = datetime.now()
         self._row_map: dict[str, int] = {}
+        # P0: 行数据缓存，仅变化的列才 setText
+        self._row_cache: dict[str, list[str]] = {}
 
         # 预渲染状态图标缓存
         self._status_icons: dict[str, QIcon] = {
@@ -131,6 +133,9 @@ class BigScreenInterface(ScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         StyleSheet.BIGSCREEN_INTERFACE.apply(self)
+
+        # 排序后重建行号映射，防止 _row_map 失效
+        self.table.horizontalHeader().sortIndicatorChanged.connect(self._rebuildRowMap)
 
         # ═══ 信号连接 ═══
         self._nm.node_online.connect(self._onNodeOnline)
@@ -339,6 +344,14 @@ class BigScreenInterface(ScrollArea):
     # 节点表格更新
     # ──────────────────────────────────────────────────────
 
+    def _rebuildRowMap(self) -> None:
+        """排序后重建 machine_name → row 映射"""
+        self._row_map.clear()
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 1)  # col 1 = machine_name
+            if item:
+                self._row_map[item.text()] = row
+
     def _onNodeOnline(self, name: str) -> None:
         node = self._nm.nodes.get(name)
         if not node:
@@ -356,19 +369,10 @@ class BigScreenInterface(ScrollArea):
             self._setRowData(self._row_map[name], node)
 
     def _setRowData(self, row: int, node) -> None:
-        # 状态列：彩色圆点图标
-        status_icon = self._status_icons.get(node.status, self._status_icon_default)
-        status_item = self.table.item(row, 0)
-        if status_item is None:
-            status_item = QTableWidgetItem()
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 0, status_item)
-        status_item.setIcon(status_icon)
-        status_item.setText("")
-
-        # 文本列
+        name = node.machine_name
+        # P0: 构建本次数据，与缓存比较，仅更新变化的列
         texts = [
-            None,  # col 0 已处理
+            "",  # col 0 状态图标
             node.machine_name,
             node.ip,
             node.current_account or "--",
@@ -376,10 +380,24 @@ class BigScreenInterface(ScrollArea):
             node.jin_bi if node.jin_bi != "0" else "--",
             node.status,
         ]
+        old_texts = self._row_cache.get(name, [])
+
+        # 状态列：彩色圆点图标（仅状态变化时更新）
+        if not old_texts or old_texts[6] != texts[6]:
+            status_icon = self._status_icons.get(node.status, self._status_icon_default)
+            status_item = self.table.item(row, 0)
+            if status_item is None:
+                status_item = QTableWidgetItem()
+                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(row, 0, status_item)
+            status_item.setIcon(status_icon)
+            status_item.setText("")
+
+        # 文本列：仅更新变化的列
         for col in range(1, len(texts)):
             text = texts[col]
-            if text is None:
-                continue
+            if old_texts and col < len(old_texts) and old_texts[col] == text:
+                continue  # 值未变，跳过
             item = self.table.item(row, col)
             if item is None:
                 item = QTableWidgetItem(text)
@@ -388,11 +406,14 @@ class BigScreenInterface(ScrollArea):
             else:
                 item.setText(text)
 
-        # 运行状态列着色
-        state_item = self.table.item(row, 6)
-        if state_item:
-            color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
-            state_item.setForeground(color)
+        # 运行状态列着色（仅状态变化时）
+        if not old_texts or old_texts[6] != texts[6]:
+            state_item = self.table.item(row, 6)
+            if state_item:
+                color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
+                state_item.setForeground(color)
+
+        self._row_cache[name] = texts
 
     # ──────────────────────────────────────────────────────
     # 标题栏刷新

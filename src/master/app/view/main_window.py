@@ -90,6 +90,7 @@ class MainWindow(FluentWindow):
     def closeEvent(self, e):
         self.udpListener.stop()
         self.logReceiver.stop()
+        self.tcpCommander.stop()
         super().closeEvent(e)
 
     def _fixMacOSTitleBar(self) -> None:

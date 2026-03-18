@@ -22,7 +22,10 @@ class UdpListenerThread(QThread):
         self._running = True
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.settimeout(2.0)
+        # P0: 1MB 接收缓冲区，防止 100+ 节点高并发心跳丢包
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+        # P0: 缩短超时，提高消息响应频率
+        sock.settimeout(0.5)
         try:
             sock.bind(("", self._port))
             while self._running:

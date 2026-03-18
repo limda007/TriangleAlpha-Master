@@ -1,6 +1,7 @@
 """账号池管理器：加载、分配、回收账号"""
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime
 from pathlib import Path
 
@@ -17,8 +18,19 @@ class AccountPool(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.accounts: list[AccountInfo] = []
+        # P1: 按状态索引，allocate() O(1)
+        self._by_status: dict[AccountStatus, list[AccountInfo]] = {
+            s: [] for s in AccountStatus
+        }
 
     # ── 加载 ───────────────────────────────────────────────
+
+    def _rebuild_index(self) -> None:
+        """重建状态索引"""
+        for s in AccountStatus:
+            self._by_status[s] = []
+        for acc in self.accounts:
+            self._by_status[acc.status].append(acc)
 
     def load_from_text(self, text: str) -> None:
         """从文本加载账号，格式: username----password（每行一个）"""
@@ -28,6 +40,7 @@ class AccountPool(QObject):
             if not line:
                 continue
             self.accounts.append(AccountInfo.from_line(line))
+        self._rebuild_index()
         self.pool_changed.emit()
 
     def load_from_file(self, path: str | Path) -> None:
@@ -42,32 +55,45 @@ class AccountPool(QObject):
 
     def allocate(self, machine_name: str) -> AccountInfo | None:
         """分配第一个空闲账号给指定机器，返回 None 表示无可用账号"""
-        for acc in self.accounts:
-            if acc.status == AccountStatus.IDLE:
-                acc.status = AccountStatus.IN_USE
-                acc.assigned_machine = machine_name
-                self.pool_changed.emit()
-                return acc
-        return None
+        idle_list = self._by_status[AccountStatus.IDLE]
+        if not idle_list:
+            return None
+        acc = idle_list.pop(0)
+        acc.status = AccountStatus.IN_USE
+        acc.assigned_machine = machine_name
+        self._by_status[AccountStatus.IN_USE].append(acc)
+        self.pool_changed.emit()
+        return acc
+
+    def _move_status(self, acc: AccountInfo, old: AccountStatus, new: AccountStatus) -> None:
+        """从旧状态索引移到新状态索引"""
+        with contextlib.suppress(ValueError):
+            self._by_status[old].remove(acc)
+        acc.status = new
+        self._by_status[new].append(acc)
 
     def complete(self, machine_name: str, level: int = 0) -> None:
         """标记机器对应的账号为已完成"""
-        for acc in self.accounts:
-            if acc.assigned_machine == machine_name and acc.status == AccountStatus.IN_USE:
-                acc.status = AccountStatus.COMPLETED
-                acc.level = level
-                acc.completed_at = datetime.now()
-                self.pool_changed.emit()
-                return
+        target = next(
+            (a for a in self._by_status[AccountStatus.IN_USE] if a.assigned_machine == machine_name),
+            None,
+        )
+        if target is not None:
+            self._move_status(target, AccountStatus.IN_USE, AccountStatus.COMPLETED)
+            target.level = level
+            target.completed_at = datetime.now()
+            self.pool_changed.emit()
 
     def release(self, machine_name: str) -> None:
         """释放机器对应的账号，恢复为空闲"""
-        for acc in self.accounts:
-            if acc.assigned_machine == machine_name and acc.status == AccountStatus.IN_USE:
-                acc.status = AccountStatus.IDLE
-                acc.assigned_machine = ""
-                self.pool_changed.emit()
-                return
+        target = next(
+            (a for a in self._by_status[AccountStatus.IN_USE] if a.assigned_machine == machine_name),
+            None,
+        )
+        if target is not None:
+            self._move_status(target, AccountStatus.IN_USE, AccountStatus.IDLE)
+            target.assigned_machine = ""
+            self.pool_changed.emit()
 
     # ── 导出 ───────────────────────────────────────────────
 
@@ -94,12 +120,12 @@ class AccountPool(QObject):
 
     @property
     def available_count(self) -> int:
-        return sum(1 for a in self.accounts if a.status == AccountStatus.IDLE)
+        return len(self._by_status[AccountStatus.IDLE])
 
     @property
     def in_use_count(self) -> int:
-        return sum(1 for a in self.accounts if a.status == AccountStatus.IN_USE)
+        return len(self._by_status[AccountStatus.IN_USE])
 
     @property
     def completed_count(self) -> int:
-        return sum(1 for a in self.accounts if a.status == AccountStatus.COMPLETED)
+        return len(self._by_status[AccountStatus.COMPLETED])
