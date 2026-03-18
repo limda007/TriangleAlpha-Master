@@ -18,6 +18,7 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     MenuAnimationType,
+    MessageBox,
     PrimaryPushButton,
     PushButton,
     RoundMenu,
@@ -186,15 +187,27 @@ class AccountInterface(ScrollArea):
         )
         if not path:
             return
-        text = self._pool.export_completed()
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            text = self._pool.export_completed()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            InfoBar.error(
+                "导出失败", str(e),
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
         InfoBar.success(
             "导出成功", f"已导出 {self._pool.completed_count} 个账号",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _clearAccounts(self) -> None:
+        if self._pool.total_count == 0:
+            return
+        dlg = MessageBox("确认清空", f"确定要清空全部 {self._pool.total_count} 个账号吗？此操作不可撤销。", self)
+        if not dlg.exec():
+            return
         self._pool.load_from_text("")
         InfoBar.info("已清空", "账号池已清空", parent=self,
                      position=InfoBarPosition.TOP, duration=2000)

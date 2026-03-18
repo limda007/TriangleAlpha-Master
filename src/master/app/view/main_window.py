@@ -4,21 +4,21 @@ from __future__ import annotations
 import sys
 
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import FluentWindow, NavigationItemPosition
+from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition
 
-from master.app.common.config import cfg
+from master.app.common.config import RESOURCE_DIR, cfg
 from master.app.core.account_pool import AccountPool
 from master.app.core.log_receiver import LogReceiverThread
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 from master.app.core.udp_listener import UdpListenerThread
 from master.app.view.account_interface import AccountInterface
-from master.app.view.dashboard_interface import DashboardInterface
+from master.app.view.bigscreen_interface import BigScreenInterface
 from master.app.view.history_interface import HistoryInterface
 from master.app.view.log_interface import LogInterface
-from master.app.view.node_interface import NodeInterface
 from master.app.view.setting_interface import SettingInterface
 
 
@@ -33,10 +33,12 @@ class MainWindow(FluentWindow):
         self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
         self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
+        self.logReceiver.error_occurred.connect(self._onLogReceiverError)
 
         # 页面
-        self.dashboardInterface = DashboardInterface(self.nodeManager, self.accountPool, self)
-        self.nodeInterface = NodeInterface(self.nodeManager, self.tcpCommander, self.accountPool, self)
+        self.bigscreenInterface = BigScreenInterface(
+            self.nodeManager, self.tcpCommander, self.accountPool, self,
+        )
         self.accountInterface = AccountInterface(self.accountPool, self)
         self.historyInterface = HistoryInterface(self.nodeManager, self)
         self.logInterface = LogInterface(self)
@@ -54,11 +56,11 @@ class MainWindow(FluentWindow):
         self._timeoutTimer.start(5000)
 
     def _initNavigation(self):
-        self.addSubInterface(self.dashboardInterface, FIF.HOME, "仪表盘")
-        self.addSubInterface(self.nodeInterface, FIF.IOT, "节点管理")
-        self.addSubInterface(self.accountInterface, FIF.PEOPLE, "账号管理")
-        self.addSubInterface(self.historyInterface, FIF.HISTORY, "操作历史")
-        self.addSubInterface(self.logInterface, FIF.DOCUMENT, "实时日志")
+        self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
+        self.navigationInterface.addSeparator()
+        self.addSubInterface(self.accountInterface, FIF.PEOPLE, "账号管理", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.historyInterface, FIF.HISTORY, "操作历史", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.logInterface, FIF.DOCUMENT, "实时日志", NavigationItemPosition.SCROLL)
         self.addSubInterface(
             self.settingInterface, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM,
         )
@@ -67,6 +69,11 @@ class MainWindow(FluentWindow):
         self.resize(1200, 800)
         self.setMinimumWidth(900)
         self.setWindowTitle("TriangleAlpha 群控中心")
+
+        # 应用图标
+        icon_path = RESOURCE_DIR / "icon_256.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         if sys.platform != "darwin":
             self.navigationInterface.setAcrylicEnabled(True)
@@ -90,3 +97,9 @@ class MainWindow(FluentWindow):
         self.titleBar.minBtn.hide()
         self.titleBar.maxBtn.hide()
         self.titleBar.closeBtn.hide()
+
+    def _onLogReceiverError(self, msg: str) -> None:
+        InfoBar.error(
+            "日志服务异常", msg,
+            parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )

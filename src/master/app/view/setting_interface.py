@@ -62,6 +62,10 @@ class SettingInterface(ScrollArea):
         self.networkGroup.addSettingCard(self.timeoutCard)
         self.mainLayout.addWidget(self.networkGroup)
 
+        portNotice = BodyLabel("  * 修改端口后需重启应用生效", self.scrollWidget)
+        portNotice.setObjectName("portNotice")
+        self.mainLayout.addWidget(portNotice)
+
         # ── 外观 ──
         self.uiGroup = SettingCardGroup("外观", self.scrollWidget)
 

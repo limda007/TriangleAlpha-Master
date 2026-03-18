@@ -6,9 +6,12 @@ from pathlib import Path
 from qfluentwidgets import (
     BoolValidator,
     ConfigItem,
+    OptionsConfigItem,
+    OptionsValidator,
     QConfig,
     RangeConfigItem,
     RangeValidator,
+    Theme,
     qconfig,
 )
 
@@ -23,6 +26,7 @@ class AppConfig(QConfig):
     tcpLogPort = RangeConfigItem("Network", "TcpLogPort", 8890, RangeValidator(1024, 65535))
     heartbeatInterval = RangeConfigItem("Network", "HeartbeatInterval", 3, RangeValidator(1, 30))
     offlineTimeout = RangeConfigItem("Network", "OfflineTimeout", 15, RangeValidator(5, 120))
+    themeMode = OptionsConfigItem("UI", "ThemeMode", Theme.AUTO, OptionsValidator(Theme), restart=False)
     micaEnabled = ConfigItem("UI", "MicaEnabled", False, BoolValidator())
 
 

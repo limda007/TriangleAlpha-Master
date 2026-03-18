@@ -17,6 +17,7 @@ class NodeManager(QObject):
     node_online = pyqtSignal(str)    # machine_name — 新节点上线
     node_offline = pyqtSignal(str)   # machine_name — 节点离线
     stats_changed = pyqtSignal()     # 统计数据变化
+    history_changed = pyqtSignal()   # 操作历史变化 (M1)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -65,6 +66,7 @@ class NodeManager(QObject):
             result=result,
         )
         self.history.append(record)
+        self.history_changed.emit()
 
     def get_nodes_by_group(self, group: str) -> list[NodeInfo]:
         """按分组筛选节点"""

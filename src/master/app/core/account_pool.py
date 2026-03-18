@@ -32,7 +32,10 @@ class AccountPool(QObject):
 
     def load_from_file(self, path: str | Path) -> None:
         """从文件加载账号"""
-        text = Path(path).read_text(encoding="utf-8")
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError as e:
+            raise OSError(f"无法读取账号文件: {e}") from e
         self.load_from_text(text)
 
     # ── 分配 / 回收 ───────────────────────────────────────
@@ -69,11 +72,12 @@ class AccountPool(QObject):
     # ── 导出 ───────────────────────────────────────────────
 
     def export_completed(self) -> str:
-        """导出已完成账号为文本，格式: username----password  等级:N"""
+        """导出已完成账号为文本，格式: username----password  等级:N  完成时间:MM-DD HH:MM"""
         lines = []
         for acc in self.accounts:
             if acc.status == AccountStatus.COMPLETED:
-                lines.append(f"{acc.username}----{acc.password}  等级:{acc.level}")
+                time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
+                lines.append(f"{acc.username}----{acc.password}  等级:{acc.level}  完成时间:{time_str}")
         return "\n".join(lines)
 
     # ── 统计属性 ───────────────────────────────────────────

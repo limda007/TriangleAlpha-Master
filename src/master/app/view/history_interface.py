@@ -1,7 +1,7 @@
 """操作历史页面 — 指令记录追踪"""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -45,7 +45,7 @@ class HistoryInterface(ScrollArea):
         titleLayout.addStretch()
 
         self.typeFilter = ComboBox(self)
-        self.typeFilter.addItems(["全部", "STARTEXE", "STOPEXE", "REBOOTPC", "UPDATEKEY", "分发卡密"])
+        self.typeFilter.addItems(["全部"])
         self.typeFilter.setFixedWidth(140)
         titleLayout.addWidget(self.typeFilter)
 
@@ -84,18 +84,22 @@ class HistoryInterface(ScrollArea):
         self.typeFilter.currentTextChanged.connect(self._refreshTable)
         self.btnClear.clicked.connect(self._clearHistory)
 
-        # 定时刷新（每5秒检查新记录）
-        self._lastCount = 0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._checkForUpdates)
-        self._timer.start(5000)
-
-    def _checkForUpdates(self) -> None:
-        if len(self._nm.history) != self._lastCount:
-            self._lastCount = len(self._nm.history)
-            self._refreshTable()
+        # 信号驱动刷新 (M1: 替代 5 秒轮询)
+        self._nm.history_changed.connect(self._refreshTable)
 
     def _refreshTable(self) -> None:
+        # 动态更新过滤选项 (H3)
+        current_filter = self.typeFilter.currentText()
+        op_types = sorted({r.op_type for r in self._nm.history})
+        new_items = ["全部"] + op_types
+        if [self.typeFilter.itemText(i) for i in range(self.typeFilter.count())] != new_items:
+            self.typeFilter.blockSignals(True)
+            self.typeFilter.clear()
+            self.typeFilter.addItems(new_items)
+            if current_filter in new_items:
+                self.typeFilter.setCurrentText(current_filter)
+            self.typeFilter.blockSignals(False)
+
         type_filter = self.typeFilter.currentText()
         records = self._nm.history[::-1]  # newest first
         if type_filter != "全部":

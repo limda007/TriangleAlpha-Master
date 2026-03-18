@@ -19,15 +19,16 @@ class _TcpSendTask(QRunnable):
         self.setAutoDelete(True)
 
     def run(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(TCP_SEND_TIMEOUT)
             sock.connect((self._ip, TCP_CMD_PORT))
             sock.sendall((self._command_str + "\n").encode("utf-8"))
-            sock.close()
             self._commander.command_sent.emit(self._ip, self._command_str)
         except Exception as e:  # noqa: BLE001
             self._commander.command_failed.emit(self._ip, str(e))
+        finally:
+            sock.close()
 
 
 class TcpCommander(QObject):

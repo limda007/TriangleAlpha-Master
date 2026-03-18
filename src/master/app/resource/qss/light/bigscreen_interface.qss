@@ -1,0 +1,132 @@
+/* 大屏模式 — 浅色主题 (层次感增强版) */
+QWidget#view { background-color: transparent; }
+QScrollArea { border: none; background-color: transparent; }
+
+/* ═══ 标题栏 ═══ */
+#headerBar {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #f0f4ff, stop:1 #e8f0fe);
+    border: 1px solid #d0d9e8;
+    border-radius: 8px;
+}
+#headerTitle {
+    color: #1e3a5f;
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+/* 徽章 */
+#badgeOnline, #badgeAccount, #badgeUptime {
+    background-color: rgba(255, 255, 255, 0.85);
+    border: 1px solid #c7d2e0;
+    border-radius: 12px;
+}
+#badgeText {
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ═══ 节点表格 ═══ */
+#nodeTable {
+    background-color: #ffffff;
+    border: 1px solid #dde3ed;
+    border-radius: 8px;
+    gridline-color: #edf0f5;
+    color: #1e293b;
+    font-size: 13px;
+}
+#nodeTable QHeaderView::section {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #f5f7fb, stop:1 #ebeef5);
+    color: #475569;
+    border: none;
+    border-bottom: 2px solid #d0d9e8;
+    border-right: 1px solid #e5e9f0;
+    padding: 8px 12px;
+    font-weight: bold;
+    font-size: 12px;
+}
+#nodeTable QHeaderView::section:last {
+    border-right: none;
+}
+#nodeTable::item {
+    padding: 6px 12px;
+}
+#nodeTable::item:selected {
+    background-color: rgba(59, 130, 246, 0.12);
+    color: #1e40af;
+}
+#nodeTable::item:alternate {
+    background-color: #f8fafc;
+}
+#nodeTable QTableCornerButton::section {
+    background-color: #f5f7fb;
+    border: none;
+}
+
+/* ═══ 账号池面板 ═══ */
+#accountPanel {
+    background-color: #ffffff;
+    border: 1px solid #dde3ed;
+    border-radius: 8px;
+}
+#panelTitle {
+    color: #334155;
+    font-size: 14px;
+    font-weight: bold;
+}
+#accountEdit {
+    background-color: #f8fafc;
+    border: 1px solid #dde3ed;
+    border-radius: 6px;
+    color: #334155;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+    padding: 6px;
+}
+#accountEdit:focus {
+    border-color: #93b4f5;
+}
+#poolStats {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* ═══ 操作按钮面板 ═══ */
+#actionPanel {
+    background-color: #ffffff;
+    border: 1px solid #dde3ed;
+    border-radius: 8px;
+}
+#actionPanel PushButton {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #f5f7fb, stop:1 #ebeef5);
+    color: #334155;
+    border: 1px solid #c7d2e0;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-weight: bold;
+    font-size: 13px;
+}
+#actionPanel PushButton:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #e8f0fe, stop:1 #dae4f5);
+    border-color: #93b4f5;
+    color: #1e40af;
+}
+#actionPanel PushButton:pressed {
+    background-color: #d0d9e8;
+    border-color: #93b4f5;
+}
+
+/* ═══ 统计卡片（复用） ═══ */
+#statCard {
+    border-radius: 8px;
+    background-color: rgba(249, 249, 249, 0.95);
+    border: 1px solid rgb(234, 234, 234);
+}
+#statTitle { color: rgb(96, 96, 96); font-size: 12px; }
+#statValue { color: black; font-size: 28px; font-weight: bold; }

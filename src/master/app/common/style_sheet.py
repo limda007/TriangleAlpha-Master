@@ -7,10 +7,9 @@ from master.app.common.config import RESOURCE_DIR
 
 
 class StyleSheet(StyleSheetBase, Enum):
-    NODE_INTERFACE = "node_interface"
-    DASHBOARD_INTERFACE = "dashboard_interface"
     ACCOUNT_INTERFACE = "account_interface"
     LOG_INTERFACE = "log_interface"
+    BIGSCREEN_INTERFACE = "bigscreen_interface"
 
     def path(self, theme=Theme.AUTO):
         theme = qconfig.theme if theme == Theme.AUTO else theme

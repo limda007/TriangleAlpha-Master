@@ -106,16 +106,6 @@ class LogInterface(ScrollArea):
         self.logOutput = QPlainTextEdit(self)
         self.logOutput.setReadOnly(True)
         self.logOutput.setObjectName("logOutput")
-        self.logOutput.setStyleSheet(
-            "QPlainTextEdit#logOutput {"
-            "  font-family: 'Menlo', 'Consolas', 'Courier New', monospace;"
-            "  font-size: 12px;"
-            "  background-color: rgba(0, 0, 0, 0.03);"
-            "  border: 1px solid rgba(0, 0, 0, 0.08);"
-            "  border-radius: 6px;"
-            "  padding: 8px;"
-            "}"
-        )
         contentLayout.addWidget(self.logOutput, 1)
         self.mainLayout.addLayout(contentLayout, 1)
 

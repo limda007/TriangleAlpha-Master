@@ -1,5 +1,0 @@
-QWidget#view { background-color: transparent; }
-QScrollArea { border: none; background-color: transparent; }
-#statCard { border-radius: 8px; background-color: rgba(39, 39, 39, 0.95); border: 1px solid rgb(60, 60, 60); }
-#statTitle { color: rgb(170, 170, 170); font-size: 12px; }
-#statValue { color: white; font-size: 28px; font-weight: bold; }

@@ -1,5 +1,12 @@
 QWidget#view { background-color: transparent; }
 QScrollArea { border: none; background-color: transparent; }
-#statCard { border-radius: 8px; background-color: rgba(249, 249, 249, 0.95); border: 1px solid rgb(234, 234, 234); }
-#statTitle { color: rgb(96, 96, 96); font-size: 12px; }
-#statValue { color: black; font-size: 28px; font-weight: bold; }
+
+#logOutput {
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+    background-color: #f8fafc;
+    border: 1px solid #dde3ed;
+    border-radius: 6px;
+    padding: 8px;
+    color: #1e293b;
+}

@@ -45,16 +45,18 @@ class LogReceiverThread(QThread):
         while self._running:
             try:
                 conn, _addr = srv.accept()
-                conn.settimeout(5.0)
-                data = b""
-                while True:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                    if b"\n" in data:
-                        break
-                conn.close()
+                try:
+                    conn.settimeout(5.0)
+                    data = b""
+                    while True:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                        if b"\n" in data:
+                            break
+                finally:
+                    conn.close()
 
                 for line in data.decode("utf-8", errors="ignore").strip().splitlines():
                     self._parse_line(line)
