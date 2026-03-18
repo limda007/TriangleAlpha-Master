@@ -11,11 +11,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 from qfluentwidgets import (
     Action,
     ComboBox,
-    FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
     MenuAnimationType,
@@ -25,6 +23,9 @@ from qfluentwidgets import (
     ScrollArea,
     SearchLineEdit,
     TableWidget,
+)
+from qfluentwidgets import (
+    FluentIcon as FIF,
 )
 
 from common.protocol import TcpCommand
@@ -244,7 +245,10 @@ class NodeInterface(ScrollArea):
         menu.addAction(Action(FIF.PLAY, "启动脚本", triggered=lambda: self._sendToSelected(TcpCommand.START_EXE)))
         menu.addAction(Action(FIF.CLOSE, "停止脚本", triggered=lambda: self._sendToSelected(TcpCommand.STOP_EXE)))
         menu.addSeparator()
-        menu.addAction(Action(FIF.POWER_BUTTON, "重启电脑", triggered=lambda: self._sendToSelected(TcpCommand.REBOOT_PC)))
+        menu.addAction(Action(
+            FIF.POWER_BUTTON, "重启电脑",
+            triggered=lambda: self._sendToSelected(TcpCommand.REBOOT_PC),
+        ))
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
 
     def _onCmdFailed(self, ip: str, error: str):

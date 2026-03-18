@@ -1,6 +1,5 @@
 """统计卡片组件"""
 from PyQt6.QtWidgets import QLabel, QVBoxLayout
-
 from qfluentwidgets import SimpleCardWidget
 
 
