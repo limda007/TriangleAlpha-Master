@@ -72,9 +72,10 @@ class SlaveBackend(QThread):
     async def _run_services(self) -> None:
         start_time = time.time()
 
-        # 自动配置
-        setup_startup()
-        check_rename(self._base_dir)
+        # P1: 同步操作放入线程池，不阻塞 event loop
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, setup_startup)
+        await loop.run_in_executor(None, check_rename, self._base_dir)
 
         # 启动时读取已有账号数
         self._emit_account_count()
@@ -114,13 +115,14 @@ class SlaveBackend(QThread):
         except asyncio.CancelledError:
             pass
         finally:
+            heartbeat.stop()
+            await handler.stop()
+            await log_reporter.stop()
             # C1: 取消所有未完成的子任务
             for task in self._tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*self._tasks, return_exceptions=True)
-            heartbeat.stop()
-            log_reporter.stop()
 
     # ── 回调 ──────────────────────────────────────────
 
@@ -150,15 +152,16 @@ class SlaveBackend(QThread):
     # ── 进程监控 ──────────────────────────────────────
 
     async def _process_monitor(self) -> None:
-        """每 5s 检测 TestDemo.exe 是否存活"""
+        """每 10s 检测 TestDemo.exe 是否存活（P0: 从 5s 提升到 10s）"""
         while self._running:
             running = self._is_testdemo_running()
             self.script_status.emit(running)
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
     @staticmethod
     def _is_testdemo_running() -> bool:
-        for proc in psutil.process_iter(["name"]):
+        # P0: 使用 attrs 缓存机制减少系统调用开销
+        for proc in psutil.process_iter(["name"], ad_value=""):
             try:
                 name = proc.info.get("name", "")
                 if name and name.lower().startswith("testdemo"):
@@ -193,7 +196,8 @@ class SlaveBackend(QThread):
                     json.dumps(status, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
-            await asyncio.sleep(5)
+            # P1: 写入间隔从 5s → 30s，减少频繁 I/O
+            await asyncio.sleep(30)
 
     # C1: 重写 stop()，通过取消任务实现优雅关闭
     def stop(self) -> None:

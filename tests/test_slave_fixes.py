@@ -3,13 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from pathlib import Path
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from common.protocol import TcpCommand
-
 
 # ── C5: 路径遍历防护 ──
 
@@ -65,11 +62,13 @@ class TestC6ProcessHandle:
         mock_proc = MagicMock()
 
         async def run():
-            with patch.object(pm, "kill_by_name", new_callable=AsyncMock, return_value=0):
-                with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
-                    result = await pm.start_testdemo()
-                    assert result is True
-                    assert pm._process is mock_proc
+            with (
+                patch.object(pm, "kill_by_name", new_callable=AsyncMock, return_value=0),
+                patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc),
+            ):
+                result = await pm.start_testdemo()
+                assert result is True
+                assert pm._process is mock_proc
 
         asyncio.run(run())
 
@@ -137,23 +136,22 @@ class TestH5PortBindRetry:
 
 
 class TestH6LogReporterRetry:
-    """验证 LogReporter 失败重试机制"""
+    """验证 LogReporter 失败重试机制（重试逻辑在 _send_lines 中）"""
 
-    def test_has_retry_counter(self):
+    def test_has_retry_loop(self):
         from slave.log_reporter import LogReporter
-        source = inspect.getsource(LogReporter.run)
-        assert "retries" in source
-        assert "max_retries" in source
+        source = inspect.getsource(LogReporter._send_lines)
+        assert "for attempt in range" in source, "_send_lines 应有重试循环"
 
     def test_exponential_backoff(self):
         from slave.log_reporter import LogReporter
-        source = inspect.getsource(LogReporter.run)
-        assert "2 ** retries" in source or "2**retries" in source
+        source = inspect.getsource(LogReporter._send_lines)
+        assert "2 ** (attempt" in source or "2**(attempt" in source, "_send_lines 应有指数退避"
 
-    def test_reinserts_to_queue_on_failure(self):
+    def test_persistent_connection(self):
         from slave.log_reporter import LogReporter
-        source = inspect.getsource(LogReporter.run)
-        assert "put_nowait" in source, "重试耗尽后应将日志推回队列"
+        source = inspect.getsource(LogReporter._ensure_connection)
+        assert "self._writer" in source, "应维护持久 TCP 连接"
 
 
 # ── H7: EXT_QUERY 移除 ──
@@ -165,7 +163,8 @@ class TestH7SlaveExtQuery:
 
     def test_remaining_commands(self):
         expected = {"UPDATE_TXT", "START_EXE", "STOP_EXE", "REBOOT_PC",
-                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP"}
+                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP",
+                    "SENDFILE_START", "SENDFILE_CHUNK", "SENDFILE_END"}
         assert {m.name for m in TcpCommand} == expected
 
 
@@ -196,10 +195,12 @@ class TestH9ExactProcessMatch:
             p.kill = MagicMock()
 
         async def run():
-            with patch("slave.auto_setup.asyncio.sleep", new_callable=AsyncMock):
-                with patch("slave.auto_setup.psutil.process_iter", return_value=procs):
-                    from slave.auto_setup import kill_remote_controls
-                    await kill_remote_controls(tmp_path)
+            with (
+                patch("slave.auto_setup.asyncio.sleep", new_callable=AsyncMock),
+                patch("slave.auto_setup.psutil.process_iter", return_value=procs),
+            ):
+                from slave.auto_setup import kill_remote_controls
+                await kill_remote_controls(tmp_path)
 
         asyncio.run(run())
 
@@ -232,7 +233,122 @@ class TestM4FileSizeLimit:
         from slave.command_handler import CommandHandler
         assert CommandHandler.MAX_FILE_SIZE == 100 * 1024 * 1024
 
-    def test_max_file_size_in_dispatch(self):
+    def test_max_file_size_in_sendfile_handler(self):
         from slave.command_handler import CommandHandler
-        source = inspect.getsource(CommandHandler._dispatch)
-        assert "MAX_FILE_SIZE" in source, "_dispatch 应检查 MAX_FILE_SIZE"
+        source = inspect.getsource(CommandHandler._handle_sendfile)
+        assert "MAX_FILE_SIZE" in source, "_handle_sendfile 应检查 MAX_FILE_SIZE"
+
+
+# ── H11: Slave 单实例保护 ──
+
+
+class TestH11SlaveSingleInstance:
+    """验证 slave 入口使用原子锁文件实现单实例保护"""
+
+    def test_acquire_instance_lock_creates_lock_file(self, tmp_path):
+        from slave.main import acquire_instance_lock
+
+        lock = acquire_instance_lock(tmp_path / ".slave.pid")
+
+        assert lock is not None
+        assert (tmp_path / ".slave.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
+        lock.release()
+        assert not (tmp_path / ".slave.pid").exists()
+
+    def test_acquire_instance_lock_rejects_active_process(self, tmp_path):
+        from slave.main import acquire_instance_lock
+
+        pid_path = tmp_path / ".slave.pid"
+        pid_path.write_text("12345", encoding="utf-8")
+
+        with patch("slave.main.psutil.pid_exists", return_value=True):
+            lock = acquire_instance_lock(pid_path)
+
+        assert lock is None
+        assert pid_path.exists()
+
+    def test_acquire_instance_lock_reclaims_stale_lock(self, tmp_path):
+        from slave.main import acquire_instance_lock
+
+        pid_path = tmp_path / ".slave.pid"
+        pid_path.write_text("12345", encoding="utf-8")
+
+        with patch("slave.main.psutil.pid_exists", return_value=False):
+            lock = acquire_instance_lock(pid_path)
+
+        assert lock is not None
+        assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
+        lock.release()
+
+    def test_release_does_not_delete_replaced_lock_file(self, tmp_path):
+        from slave.main import acquire_instance_lock
+
+        pid_path = tmp_path / ".slave.pid"
+        lock = acquire_instance_lock(pid_path)
+
+        assert lock is not None
+        pid_path.unlink()
+        pid_path.write_text("99999", encoding="utf-8")
+
+        lock.release()
+
+        assert pid_path.exists()
+        assert pid_path.read_text(encoding="utf-8").strip() == "99999"
+
+    def test_main_warns_and_exits_when_instance_lock_exists(self, tmp_path):
+        import pytest
+
+        from slave.main import main
+
+        mock_app = MagicMock()
+
+        with (
+            patch("slave.main.QApplication", return_value=mock_app) as mock_qapp,
+            patch("slave.main._get_base_dir", return_value=tmp_path),
+            patch("slave.main.acquire_instance_lock", return_value=None) as mock_lock,
+            patch("slave.main.QMessageBox.warning") as mock_warning,
+            patch("slave.main.SlaveWindow") as mock_window,
+            patch("slave.main.SlaveBackend") as mock_backend,
+            patch("slave.main.sys.exit", side_effect=SystemExit) as mock_exit,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_qapp.assert_called_once()
+        mock_app.setQuitOnLastWindowClosed.assert_called_once_with(False)
+        mock_lock.assert_called_once_with(tmp_path / ".slave.pid")
+        mock_warning.assert_called_once_with(
+            None,
+            "TA-Slave",
+            "已有实例在运行中，请勿重复启动。",
+        )
+        mock_exit.assert_called_once_with(0)
+        mock_window.assert_not_called()
+        mock_backend.assert_not_called()
+        mock_app.exec.assert_not_called()
+
+    def test_main_exits_when_backend_does_not_stop(self, tmp_path):
+        import pytest
+
+        from slave.main import main
+
+        mock_app = MagicMock()
+        mock_app.exec.return_value = 0
+        mock_backend = MagicMock()
+        mock_backend.wait.return_value = False
+        mock_lock = MagicMock()
+
+        with (
+            patch("slave.main.QApplication", return_value=mock_app),
+            patch("slave.main._get_base_dir", return_value=tmp_path),
+            patch("slave.main.acquire_instance_lock", return_value=mock_lock),
+            patch("slave.main._read_master_ip", return_value=None),
+            patch("slave.main.SlaveWindow", return_value=MagicMock()),
+            patch("slave.main.SlaveBackend", return_value=mock_backend),
+            pytest.raises(RuntimeError, match="SlaveBackend did not stop within 5 seconds"),
+        ):
+            main()
+
+        mock_backend.stop.assert_called_once()
+        mock_backend.wait.assert_called_once_with(5000)
+        mock_lock.release.assert_not_called()

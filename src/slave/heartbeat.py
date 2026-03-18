@@ -31,6 +31,8 @@ class HeartbeatService:
         self._running = False
         self._on_sent = on_sent
         self._beat_count = 0
+        # P0: 预热 CPU 采样基准值，避免首次 interval=0 返回 0.0
+        psutil.cpu_percent()
 
     @property
     def machine_name(self) -> str:

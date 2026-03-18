@@ -6,6 +6,7 @@ import contextlib
 import functools
 import queue as thread_queue
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import IO
 
@@ -24,6 +25,10 @@ class LogReporter:
         self._queue: thread_queue.Queue[str] = thread_queue.Queue(maxsize=1000)
         self._running = False
         self._original_stdout: IO[str] | None = None
+        # P0: 专用单线程池，不占用默认线程池
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log-reporter")
+        # P1: 持久化 TCP 连接
+        self._writer: asyncio.StreamWriter | None = None
 
     def install(self) -> None:
         """安装 stdout 拦截器（兼容 console=False 时 stdout=None）"""
@@ -38,16 +43,18 @@ class LogReporter:
 
         self._running = True
         loop = asyncio.get_running_loop()
-        while self._running:
+        while self._running or not self._queue.empty():
             lines: list[str] = []
-            # C2: 通过 run_in_executor 桥接线程安全队列的阻塞 get
+            # P0: 使用专用线程池，不阻塞默认线程池
             try:
                 line = await loop.run_in_executor(
-                    None, functools.partial(self._queue.get, timeout=5.0),
+                    self._executor, functools.partial(self._queue.get, timeout=1.0),
                 )
                 lines.append(line)
             except thread_queue.Empty:
                 continue
+            except RuntimeError:
+                break
 
             # 批量取剩余
             while not self._queue.empty() and len(lines) < 50:
@@ -59,29 +66,69 @@ class LogReporter:
             # 发送
             await self._send_lines(lines)
 
+    async def _ensure_connection(self) -> asyncio.StreamWriter | None:
+        """P1: 获取或建立持久 TCP 连接"""
+        if self._writer is not None:
+            if self._writer.is_closing():
+                self._writer = None
+            else:
+                return self._writer
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(self._master_ip, self._port),
+                timeout=5.0,
+            )
+            self._writer = writer
+            return writer
+        except Exception:
+            self._writer = None
+            return None
+
     async def _send_lines(self, lines: list[str]) -> None:
-        """发送日志行到中控，带重试"""
+        """P1: 通过持久连接发送日志行，断开时重连"""
+        payload = ("\n".join(lines) + "\n").encode("utf-8")
         for attempt in range(3):
-            try:
-                _, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self._master_ip, self._port),
-                    timeout=5.0,
-                )
-                payload = "\n".join(lines) + "\n"
-                writer.write(payload.encode("utf-8"))
-                await writer.drain()
-                writer.close()
-                await writer.wait_closed()
-                return
-            except Exception:
+            writer = await self._ensure_connection()
+            if writer is None:
                 if attempt < 2:
                     await asyncio.sleep(2 ** (attempt + 1))
-        # M5: 重试耗尽，丢弃日志（推回队列无法保证顺序，不如丢弃）
+                continue
+            try:
+                writer.write(payload)
+                await writer.drain()
+                return
+            except Exception:
+                # 连接断开，重置并重试
+                with contextlib.suppress(Exception):
+                    writer.close()
+                self._writer = None
+                if attempt < 2:
+                    await asyncio.sleep(2 ** (attempt + 1))
+        # M5: 重试耗尽，丢弃日志
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self._running = False
         if self._original_stdout is not None:
             sys.stdout = self._original_stdout
+        while not self._queue.empty():
+            lines: list[str] = []
+            while not self._queue.empty() and len(lines) < 50:
+                try:
+                    lines.append(self._queue.get_nowait())
+                except thread_queue.Empty:
+                    break
+            if lines:
+                await self._send_lines(lines)
+        # P1: 关闭持久连接和专用线程池
+        if self._writer is not None:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+                await self._writer.wait_closed()
+            self._writer = None
+        # 唤醒可能阻塞在 queue.get() 的 executor 线程，避免 shutdown 等待超时
+        with contextlib.suppress(thread_queue.Full):
+            self._queue.put_nowait("")
+        self._executor.shutdown(wait=True)
 
 
 class _TeeWriter:

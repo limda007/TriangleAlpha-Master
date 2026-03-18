@@ -1,10 +1,13 @@
 """被控端入口 — PyQt6 GUI + asyncio 后台服务"""
 from __future__ import annotations
 
+import contextlib
+import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication
+import psutil
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from slave.backend import SlaveBackend
 from slave.slave_window import SlaveWindow
@@ -18,6 +21,53 @@ def _get_base_dir() -> Path:
     if (cwd / "TestDemo.exe").exists() or (cwd / "主控IP.txt").exists() or (cwd / "master.txt").exists():
         return cwd
     return Path(__file__).parent
+
+
+class InstanceLock:
+    def __init__(self, pid_path: Path, fd: int) -> None:
+        self._pid_path = pid_path
+        self._fd: int | None = fd
+        self._pid = os.getpid()
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        os.close(self._fd)
+        self._fd = None
+        if _read_lock_pid(self._pid_path) != self._pid:
+            return
+        with contextlib.suppress(FileNotFoundError):
+            self._pid_path.unlink()
+
+
+
+def _read_lock_pid(pid_path: Path) -> int | None:
+    try:
+        return int(pid_path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+
+def _is_pid_active(pid: int) -> bool:
+    return pid != os.getpid() and psutil.pid_exists(pid)
+
+
+
+def acquire_instance_lock(pid_path: Path) -> InstanceLock | None:
+    while True:
+        try:
+            fd = os.open(pid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            old_pid = _read_lock_pid(pid_path)
+            if old_pid is not None and _is_pid_active(old_pid):
+                return None
+            with contextlib.suppress(FileNotFoundError):
+                pid_path.unlink()
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as fh:
+            fh.write(str(os.getpid()))
+        return InstanceLock(pid_path, fd)
 
 
 def _read_master_ip(base_dir: Path) -> str | None:
@@ -36,6 +86,14 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)  # 托盘模式
 
     base_dir = _get_base_dir()
+
+    # 单实例保护：原子锁文件
+    pid_path = base_dir / ".slave.pid"
+    instance_lock = acquire_instance_lock(pid_path)
+    if instance_lock is None:
+        QMessageBox.warning(None, "TA-Slave", "已有实例在运行中，请勿重复启动。")
+        sys.exit(0)
+
     master_ip = _read_master_ip(base_dir)
 
     window = SlaveWindow(base_dir, master_ip)
@@ -53,9 +111,13 @@ def main() -> None:
     backend.start()
     window.show()
 
-    exit_code = app.exec()
-    backend.stop()
-    backend.wait(5000)
+    try:
+        exit_code = app.exec()
+    finally:
+        backend.stop()
+        if not backend.wait(5000):
+            raise RuntimeError("SlaveBackend did not stop within 5 seconds")
+        instance_lock.release()
     sys.exit(exit_code)
 
 

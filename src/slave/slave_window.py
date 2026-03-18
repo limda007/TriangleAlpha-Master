@@ -40,6 +40,13 @@ class SlaveWindow(QWidget):
         self._uptime_timer.timeout.connect(self._update_uptime)
         self._uptime_timer.start(1000)
 
+        # P1: 日志批量刷新缓冲
+        self._log_buffer: list[str] = []
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.setInterval(300)
+        self._log_flush_timer.timeout.connect(self._flush_log_buffer)
+
     # ── UI 构建 ──────────────────────────────────────────
 
     def _init_ui(self) -> None:
@@ -178,7 +185,17 @@ class SlaveWindow(QWidget):
         self._lbl_group.setText(f"分组: {group}")
 
     def append_log(self, text: str) -> None:
-        self._log_area.appendPlainText(text)
+        """P1: 累积到 buffer，QTimer 300ms 批量 flush"""
+        self._log_buffer.append(text)
+        if not self._log_flush_timer.isActive():
+            self._log_flush_timer.start()
+
+    def _flush_log_buffer(self) -> None:
+        """批量刷新日志到 GUI"""
+        if not self._log_buffer:
+            return
+        self._log_area.appendPlainText("\n".join(self._log_buffer))
+        self._log_buffer.clear()
 
     # ── 内部 ──────────────────────────────────────────
 

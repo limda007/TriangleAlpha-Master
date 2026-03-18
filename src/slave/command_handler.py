@@ -31,6 +31,7 @@ class CommandHandler:
         self._base_dir = Path(base_dir)
         self._port = port
         self._pm = ProcessManager(base_dir)
+        self._server: asyncio.AbstractServer | None = None
         # H7: 使用正确的类型标注
         self._group_callback: Callable[[str], None] | None = None
         self._on_command = on_command
@@ -57,7 +58,10 @@ class CommandHandler:
                     reuse_address=True,
                     # H1: 设置更大的缓冲区限制
                     limit=self.STREAM_LIMIT,
+                    # P1: 增加 TCP backlog，支持高并发连接
+                    backlog=256,
                 )
+                self._server = server
                 break
             except OSError as e:
                 if attempt < max_retries - 1:
@@ -68,8 +72,19 @@ class CommandHandler:
                     print(f"[TCP] 端口 {self._port} 绑定失败，已重试 {max_retries} 次，放弃")
                     return
         print(f"[TCP] 指令监听已启动，端口 {self._port}")
-        async with server:
-            await server.serve_forever()
+        try:
+            async with server:
+                await server.serve_forever()
+        finally:
+            self._server = None
+
+    async def stop(self) -> None:
+        if self._server is None:
+            return
+        server = self._server
+        self._server = None
+        server.close()
+        await server.wait_closed()
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername", ("unknown", 0))

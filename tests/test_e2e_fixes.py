@@ -5,20 +5,15 @@ import asyncio
 import base64
 import contextlib
 import socket
-import threading
-import time
-from pathlib import Path
 
 from common.protocol import (
     TcpCommand,
-    UdpMessageType,
     build_tcp_command,
     build_udp_ext_online,
     build_udp_offline,
     parse_udp_message,
 )
 from master.app.core.node_manager import NodeManager
-
 
 # ── UDP 心跳 → NodeManager 状态管理 ──
 
@@ -53,13 +48,19 @@ class TestUdpHeartbeatIntegration:
         assert nm.nodes["VM-01"].status == "离线"
 
     def test_heartbeat_signal_chain(self):
-        """heart_changed 信号链：上线 → stats_changed"""
+        """heart_changed 信号链：上线 → stats_changed（200ms 防抖）"""
+
         nm = NodeManager()
         stats_calls = []
         nm.stats_changed.connect(lambda: stats_calls.append(True))
 
         msg = parse_udp_message(build_udp_ext_online("VM-02", "A", 0, 0, "2", "默认"))
         nm.handle_udp_message(msg, "10.0.0.2")
+
+        # stats_changed 有 200ms 防抖，需要处理 QTimer 事件
+        # 直接 flush 防抖 timer
+        nm._stats_timer.stop()
+        nm._flush_stats()
 
         assert len(stats_calls) >= 1
 
@@ -223,7 +224,7 @@ class TestSendFileE2E:
             w.write(b"SENDFILE_START|test_received.dat\n")
             # 发送 CHUNK
             encoded = base64.b64encode(content).decode()
-            w.write(f"SENDFILE_CHUNK|{encoded}\n".encode("utf-8"))
+            w.write(f"SENDFILE_CHUNK|{encoded}\n".encode())
             # 发送 END
             w.write(b"SENDFILE_END|\n")
             await w.drain()
@@ -342,15 +343,18 @@ class TestProtocolCompatibility:
     """验证所有 TcpCommand 枚举值在 slave 有对应 handler"""
 
     def test_all_commands_have_handlers(self):
-        """每个 TcpCommand 的 value 都应在 slave _dispatch 中被处理"""
+        """每个 TcpCommand 的 value 都应在 slave _dispatch 或其子方法中被处理"""
         import inspect
+
         from slave.command_handler import CommandHandler
 
-        source = inspect.getsource(CommandHandler._dispatch)
+        dispatch_source = inspect.getsource(CommandHandler._dispatch)
+        # SENDFILE_CHUNK / SENDFILE_END 是 _handle_sendfile 内的子协议，不在 _dispatch 顶层
+        sendfile_source = inspect.getsource(CommandHandler._handle_sendfile)
+        combined = dispatch_source + sendfile_source
 
         for cmd in TcpCommand:
-            # EXT_SET_GROUP 以 EXT_SETGROUP| 形式出现
-            assert cmd.value in source, f"TcpCommand.{cmd.name} ({cmd.value}) 在 _dispatch 中无对应 handler"
+            assert cmd.value in combined, f"TcpCommand.{cmd.name} ({cmd.value}) 在处理链中无对应 handler"
 
     def test_build_and_parse_roundtrip(self):
         """构建 TCP 命令 → 解码验证"""
@@ -376,4 +380,4 @@ def _free_port() -> int:
     """获取一个空闲端口"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        return int(s.getsockname()[1])
