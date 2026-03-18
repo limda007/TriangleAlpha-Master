@@ -19,6 +19,8 @@ dev = [
     "mypy",
     "pytest",
     "pyinstaller>=6.0",
+    "cairosvg>=2.9.0",
+    "pillow>=12.1.1",
 ]
 
 [build-system]
