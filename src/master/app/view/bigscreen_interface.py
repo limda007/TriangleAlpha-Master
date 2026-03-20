@@ -251,6 +251,7 @@ class BigScreenInterface(ScrollArea):
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(True)
+        table.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # 默认按机器名升序
         table.verticalHeader().hide()
 
         header = table.horizontalHeader()
