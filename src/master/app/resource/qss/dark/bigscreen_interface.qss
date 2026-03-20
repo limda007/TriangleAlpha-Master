@@ -1,6 +1,6 @@
-/* 大屏模式 — 深色主题 (层次感增强版) */
-QWidget#view { background-color: transparent; }
-QScrollArea { border: none; background-color: transparent; }
+/* 大屏模式 — 深色主题 */
+/* 仅去 ScrollArea 边框，不设 transparent — 让 Fluent 主题提供不透明背景 */
+#bigscreenInterface { border: none; }
 
 /* ═══ 标题栏 ═══ */
 #headerBar {
@@ -29,44 +29,6 @@ QScrollArea { border: none; background-color: transparent; }
     color: #cbd5e1;
     font-size: 12px;
     font-weight: 600;
-}
-
-/* ═══ 节点表格 ═══ */
-#nodeTable {
-    background-color: rgba(15, 23, 42, 0.95);
-    border: 1px solid #1e3a5f;
-    border-radius: 8px;
-    gridline-color: #1e2d4a;
-    color: #e2e8f0;
-    font-size: 13px;
-}
-#nodeTable QHeaderView::section {
-    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #1a2744, stop:1 #0f172a);
-    color: #94a3b8;
-    border: none;
-    border-bottom: 2px solid #1e3a5f;
-    border-right: 1px solid #1e2d4a;
-    padding: 8px 12px;
-    font-weight: bold;
-    font-size: 12px;
-}
-#nodeTable QHeaderView::section:last {
-    border-right: none;
-}
-#nodeTable::item {
-    padding: 6px 12px;
-}
-#nodeTable::item:selected {
-    background-color: rgba(59, 130, 246, 0.25);
-    color: #93c5fd;
-}
-#nodeTable::item:alternate {
-    background-color: rgba(15, 23, 42, 0.5);
-}
-#nodeTable QTableCornerButton::section {
-    background-color: #0f172a;
-    border: none;
 }
 
 /* ═══ 账号池面板 ═══ */
@@ -133,3 +95,9 @@ QScrollArea { border: none; background-color: transparent; }
 }
 #statTitle { color: rgb(170, 170, 170); font-size: 12px; }
 #statValue { color: white; font-size: 28px; font-weight: bold; }
+
+/* 危险按钮 hover */
+#btnRebootPC:hover, #btnStopExe:hover, #btnDeleteFile:hover {
+    border-color: #ef4444;
+    color: #fca5a5;
+}

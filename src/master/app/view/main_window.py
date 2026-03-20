@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
@@ -9,8 +10,9 @@ from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition
 
+from common.protocol import TcpCommand
 from master.app.common.config import RESOURCE_DIR, cfg
-from master.app.core.account_pool import AccountPool
+from master.app.core.account_db import AccountDB
 from master.app.core.log_receiver import LogReceiverThread
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
@@ -22,6 +24,13 @@ from master.app.view.log_interface import LogInterface
 from master.app.view.setting_interface import SettingInterface
 
 
+def _get_db_path() -> Path:
+    """accounts.db 放在 master exe 同目录"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "accounts.db"
+    return Path(__file__).resolve().parents[4] / "accounts.db"
+
+
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
@@ -29,7 +38,7 @@ class MainWindow(FluentWindow):
         # 核心服务
         self.nodeManager = NodeManager(self)
         self.tcpCommander = TcpCommander(parent=self)
-        self.accountPool = AccountPool(self)
+        self.accountPool = AccountDB(_get_db_path(), parent=self)
         self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
         self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
@@ -54,6 +63,12 @@ class MainWindow(FluentWindow):
         self._timeoutTimer = QTimer(self)
         self._timeoutTimer.timeout.connect(self.nodeManager.check_timeouts)
         self._timeoutTimer.start(5000)
+
+        # 节点重连时自动重发绑定账号
+        self.nodeManager.node_online.connect(self._onNodeReconnect)
+
+        # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
+        self.nodeManager.node_updated.connect(self._syncAccountFromNode)
 
     def _initNavigation(self):
         self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
@@ -88,6 +103,7 @@ class MainWindow(FluentWindow):
             self.move(geo.width() // 2 - self.width() // 2, geo.height() // 2 - self.height() // 2)
 
     def closeEvent(self, e):
+        self.accountPool.close()
         self.udpListener.stop()
         self.logReceiver.stop()
         self.tcpCommander.stop()
@@ -103,4 +119,22 @@ class MainWindow(FluentWindow):
         InfoBar.error(
             "日志服务异常", msg,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
+
+    def _onNodeReconnect(self, machine_name: str) -> None:
+        """节点上线时自动重发其绑定的账号"""
+        acc = self.accountPool.get_account_for_machine(machine_name)
+        if acc is None:
+            return
+        node = self.nodeManager.nodes.get(machine_name)
+        if node:
+            self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+
+    def _syncAccountFromNode(self, machine_name: str) -> None:
+        """slave STATUS 上报 → 同步等级/金币/状态到 AccountDB"""
+        node = self.nodeManager.nodes.get(machine_name)
+        if not node or not node.current_account:
+            return
+        self.accountPool.update_from_status(
+            machine_name, node.level, node.jin_bi, node.status,
         )

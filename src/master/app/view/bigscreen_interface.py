@@ -7,6 +7,7 @@ from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -19,11 +20,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    Action,
     CheckBox,
     InfoBar,
     InfoBarPosition,
+    MenuAnimationType,
+    MessageBox,
     PlainTextEdit,
     PushButton,
+    RoundMenu,
     ScrollArea,
     TableWidget,
 )
@@ -33,7 +38,7 @@ from qfluentwidgets import (
 
 from common.protocol import TcpCommand
 from master.app.common.style_sheet import StyleSheet
-from master.app.core.account_pool import AccountPool
+from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 
@@ -41,6 +46,7 @@ _NODE_HEADERS = ["", "机器名", "IP地址", "挂机账号", "等级", "金币"
 
 # 操作按钮配置: (文本, FluentIcon, objectName)
 _ACTION_BUTTONS = [
+    ("分发账号", FIF.SEND, "btnDistAccounts"),
     ("提取合格出货", FIF.COMPLETED, "btnExport"),
     ("一键下发文件", FIF.SEND_FILL, "btnSendFile"),
     ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
@@ -79,7 +85,7 @@ class BigScreenInterface(ScrollArea):
         self,
         node_mgr: NodeManager,
         tcp_cmd: TcpCommander,
-        account_pool: AccountPool,
+        account_pool: AccountDB,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -89,8 +95,6 @@ class BigScreenInterface(ScrollArea):
         self._pool = account_pool
         self._start_time = datetime.now()
         self._row_map: dict[str, int] = {}
-        # P0: 行数据缓存，仅变化的列才 setText
-        self._row_cache: dict[str, list[str]] = {}
 
         # 预渲染状态图标缓存
         self._status_icons: dict[str, QIcon] = {
@@ -137,10 +141,16 @@ class BigScreenInterface(ScrollArea):
         # 排序后重建行号映射，防止 _row_map 失效
         self.table.horizontalHeader().sortIndicatorChanged.connect(self._rebuildRowMap)
 
+        # 节点表格防抖刷新定时器
+        self._tableRefreshTimer = QTimer(self)
+        self._tableRefreshTimer.setSingleShot(True)
+        self._tableRefreshTimer.setInterval(100)
+        self._tableRefreshTimer.timeout.connect(self._refreshNodeTable)
+
         # ═══ 信号连接 ═══
-        self._nm.node_online.connect(self._onNodeOnline)
-        self._nm.node_updated.connect(self._onNodeUpdated)
-        self._nm.node_offline.connect(self._onNodeUpdated)
+        self._nm.node_online.connect(self._scheduleRefreshTable)
+        self._nm.node_updated.connect(self._scheduleRefreshTable)
+        self._nm.node_offline.connect(self._scheduleRefreshTable)
         self._nm.stats_changed.connect(self._refreshHeader)
         self._pool.pool_changed.connect(self._refreshAccountStats)
         self._pool.pool_changed.connect(self._syncAccountEditFromPool)
@@ -163,6 +173,10 @@ class BigScreenInterface(ScrollArea):
         # 超时监控定时器
         self._watchdogTimer = QTimer(self)
         self._watchdogTimer.timeout.connect(self._checkStaleNodes)
+
+        # 启动时从 DB 同步数据到 UI
+        self._syncAccountEditFromPool()
+        self._refreshAccountStats()
 
     # ──────────────────────────────────────────────────────
     # 构建 UI
@@ -227,7 +241,7 @@ class BigScreenInterface(ScrollArea):
             lbl.setText(text)
 
     def _buildNodeTable(self) -> TableWidget:
-        """节点实时状态表格"""
+        """节点实时状态表格（严格对齐 AccountInterface 写法）"""
         table = TableWidget(self)
         table.setObjectName("nodeTable")
         table.setColumnCount(len(_NODE_HEADERS))
@@ -237,21 +251,19 @@ class BigScreenInterface(ScrollArea):
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(True)
-
-        # 隐藏行号
         table.verticalHeader().hide()
 
         header = table.horizontalHeader()
-        # 状态列（圆点图标）固定窄宽
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(0, 48)
-        # 机器名、IP、挂机账号 stretch
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        # 等级、金币、运行状态 自适应
         for col in (4, 5, 6):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+
+        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        table.customContextMenuRequested.connect(self._showNodeContextMenu)
 
         return table
 
@@ -330,13 +342,14 @@ class BigScreenInterface(ScrollArea):
             self._actionBtns.append(btn)
 
         # 连接按钮信号
-        self._actionBtns[0].clicked.connect(self._exportQualified)
-        self._actionBtns[1].clicked.connect(self._sendFileToAll)
-        self._actionBtns[2].clicked.connect(self._deleteFileOnAll)
-        self._actionBtns[3].clicked.connect(self._distributeKey)
-        self._actionBtns[4].clicked.connect(self._startExeOnAll)
-        self._actionBtns[5].clicked.connect(self._rebootAllPC)
-        self._actionBtns[6].clicked.connect(self._stopExeOnAll)
+        self._actionBtns[0].clicked.connect(self._distributeAccounts)
+        self._actionBtns[1].clicked.connect(self._exportQualified)
+        self._actionBtns[2].clicked.connect(self._sendFileToAll)
+        self._actionBtns[3].clicked.connect(self._deleteFileOnAll)
+        self._actionBtns[4].clicked.connect(self._distributeKey)
+        self._actionBtns[5].clicked.connect(self._startExeOnAll)
+        self._actionBtns[6].clicked.connect(self._rebootAllPC)
+        self._actionBtns[7].clicked.connect(self._stopExeOnAll)
 
         return panel
 
@@ -352,25 +365,24 @@ class BigScreenInterface(ScrollArea):
             if item:
                 self._row_map[item.text()] = row
 
-    def _onNodeOnline(self, name: str) -> None:
-        node = self._nm.nodes.get(name)
-        if not node:
-            return
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        self._row_map[name] = row
-        self._setRowData(row, node)
+    def _scheduleRefreshTable(self, _name: str = "") -> None:
+        """防抖：100ms 内的多次信号合并为一次刷新"""
+        if not self._tableRefreshTimer.isActive():
+            self._tableRefreshTimer.start()
 
-    def _onNodeUpdated(self, name: str) -> None:
-        if name not in self._row_map:
-            return
-        node = self._nm.nodes.get(name)
-        if node:
-            self._setRowData(self._row_map[name], node)
+    def _refreshNodeTable(self) -> None:
+        """全量重建节点表格（与 AccountInterface._refreshTable 同模式）"""
+        nodes = list(self._nm.nodes.values())
+        self.table.setUpdatesEnabled(False)
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(nodes))
+        for row, node in enumerate(nodes):
+            self._setRowData(row, node)
+        self.table.setSortingEnabled(True)
+        self.table.setUpdatesEnabled(True)
+        self._rebuildRowMap()
 
     def _setRowData(self, row: int, node) -> None:
-        name = node.machine_name
-        # P0: 构建本次数据，与缓存比较，仅更新变化的列
         texts = [
             "",  # col 0 状态图标
             node.machine_name,
@@ -380,24 +392,20 @@ class BigScreenInterface(ScrollArea):
             node.jin_bi if node.jin_bi != "0" else "--",
             node.status,
         ]
-        old_texts = self._row_cache.get(name, [])
 
-        # 状态列：彩色圆点图标（仅状态变化时更新）
-        if not old_texts or old_texts[6] != texts[6]:
-            status_icon = self._status_icons.get(node.status, self._status_icon_default)
-            status_item = self.table.item(row, 0)
-            if status_item is None:
-                status_item = QTableWidgetItem()
-                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(row, 0, status_item)
-            status_item.setIcon(status_icon)
-            status_item.setText("")
+        # 状态列：彩色圆点图标
+        status_icon = self._status_icons.get(node.status, self._status_icon_default)
+        status_item = self.table.item(row, 0)
+        if status_item is None:
+            status_item = QTableWidgetItem()
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 0, status_item)
+        status_item.setIcon(status_icon)
+        status_item.setText("")
 
-        # 文本列：仅更新变化的列
+        # 文本列：全量写入
         for col in range(1, len(texts)):
             text = texts[col]
-            if old_texts and col < len(old_texts) and old_texts[col] == text:
-                continue  # 值未变，跳过
             item = self.table.item(row, col)
             if item is None:
                 item = QTableWidgetItem(text)
@@ -406,14 +414,11 @@ class BigScreenInterface(ScrollArea):
             else:
                 item.setText(text)
 
-        # 运行状态列着色（仅状态变化时）
-        if not old_texts or old_texts[6] != texts[6]:
-            state_item = self.table.item(row, 6)
-            if state_item:
-                color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
-                state_item.setForeground(color)
-
-        self._row_cache[name] = texts
+        # 运行状态列着色
+        state_item = self.table.item(row, 6)
+        if state_item:
+            color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
+            state_item.setForeground(color)
 
     # ──────────────────────────────────────────────────────
     # 标题栏刷新
@@ -443,11 +448,11 @@ class BigScreenInterface(ScrollArea):
         self._refreshHeader()
 
     def _syncAccountEditFromPool(self) -> None:
-        """AccountPool 变化 → 更新文本框（从 AccountInterface 导入时触发）"""
+        """AccountDB 变化 → 更新文本框"""
         if self._syncing:
             return
         self._syncing = True
-        lines = [acc.to_line() for acc in self._pool.accounts]
+        lines = [acc.to_line() for acc in self._pool.get_all_accounts()]
         self.accountEdit.setPlainText("\n".join(lines))
         self._syncing = False
 
@@ -458,11 +463,11 @@ class BigScreenInterface(ScrollArea):
         self._debounceTimer.start()
 
     def _syncAccountEditToPool(self) -> None:
-        """防抖触发：实际同步到 AccountPool"""
+        """防抖触发：全量同步到 AccountDB"""
         if self._syncing:
             return
         self._syncing = True
-        self._pool.load_from_text(self.accountEdit.toPlainText())
+        self._pool.import_fresh(self.accountEdit.toPlainText())
         self._syncing = False
 
     # ──────────────────────────────────────────────────────
@@ -476,6 +481,76 @@ class BigScreenInterface(ScrollArea):
             for n in self._nm.nodes.values()
             if n.status not in ("离线", "断连")
         ]
+
+    def _getSelectedOnlineNodes(self) -> tuple[list, bool]:
+        """返回 (目标节点列表, 是否来自选中)"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if selected_rows:
+            names = []
+            for idx in selected_rows:
+                item = self.table.item(idx.row(), 1)  # col 1 = machine_name
+                if item:
+                    names.append(item.text())
+            nodes = [
+                self._nm.nodes[n]
+                for n in names
+                if n in self._nm.nodes
+                and self._nm.nodes[n].status not in ("离线", "断连")
+            ]
+            if nodes:
+                return nodes, True
+        # 回退：全部在线
+        return [
+            n for n in self._nm.nodes.values() if n.status not in ("离线", "断连")
+        ], False
+
+    def _getTargetIPs(self) -> tuple[list[str], bool]:
+        """便捷包装，返回 (IP 列表, 是否选中模式)"""
+        nodes, is_sel = self._getSelectedOnlineNodes()
+        return [n.ip for n in nodes], is_sel
+
+    def _confirmDangerous(self, title: str, content: str) -> bool:
+        """危险操作二次确认对话框"""
+        dlg = MessageBox(title, content, self.window())
+        dlg.yesButton.setText("确认执行")
+        dlg.cancelButton.setText("取消")
+        return bool(dlg.exec())
+
+    def _distributeAccounts(self) -> None:
+        """分发账号：遍历在线节点，每台分配一个空闲账号并单播"""
+        online_nodes, selected = self._getSelectedOnlineNodes()
+        if not online_nodes:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        scope = "选中" if selected else "在线"
+        distributed = 0
+        for node in online_nodes:
+            # 已有绑定账号的节点：重发
+            existing = self._pool.get_account_for_machine(node.machine_name)
+            if existing:
+                self._tcp.send(node.ip, TcpCommand.UPDATE_TXT, existing.to_line())
+                distributed += 1
+                continue
+            # 分配新账号
+            acc = self._pool.allocate(node.machine_name)
+            if acc is None:
+                break
+            self._tcp.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+            distributed += 1
+        if distributed:
+            self._nm.add_history("分发账号", f"{distributed} 个{scope}节点")
+            InfoBar.success(
+                "分发成功", f"已分发 {distributed} 个账号到{scope}节点",
+                parent=self, position=InfoBarPosition.TOP, duration=3000,
+            )
+        else:
+            InfoBar.info(
+                "提示", "没有可分发的空闲账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
 
     def _exportQualified(self) -> None:
         """提取合格出货"""
@@ -510,7 +585,7 @@ class BigScreenInterface(ScrollArea):
         path, _ = QFileDialog.getOpenFileName(self, "选择文件")
         if not path:
             return
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
@@ -526,26 +601,30 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         self._tcp.broadcast(ips, TcpCommand.UPDATE_TXT, content)
-        self._nm.add_history("下发文件", f"{len(ips)} 个节点")
+        self._nm.add_history("下发文件", scope)
         InfoBar.success(
-            "已下发", f"文件已发送到 {len(ips)} 个在线节点",
+            "已下发", f"文件已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _deleteFileOnAll(self) -> None:
         """批量删除文件"""
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not self._confirmDangerous("批量删除文件", f"即将删除 {scope} 上的文件"):
+            return
         self._tcp.broadcast(ips, TcpCommand.DELETE_FILE)
-        self._nm.add_history("批量删除文件", f"{len(ips)} 个节点")
+        self._nm.add_history("批量删除文件", scope)
         InfoBar.success(
-            "已发送", f"删除指令已发送到 {len(ips)} 个节点",
+            "已发送", f"删除指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
@@ -565,66 +644,209 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        scope = f"{'选中' if selected else '在线'}"
         self._tcp.broadcast(ips, TcpCommand.UPDATE_KEY, key)
-        self._nm.add_history("分发卡密", f"{len(ips)} 个节点")
+        self._nm.add_history("分发卡密", f"{len(ips)} 个{scope}节点")
         InfoBar.success(
-            "卡密已分发", f"已发送到 {len(ips)} 个节点",
+            "卡密已分发", f"已发送到 {len(ips)} 个{scope}节点",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _startExeOnAll(self) -> None:
         """启动/重启脚本"""
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         self._tcp.broadcast(ips, TcpCommand.START_EXE)
-        self._nm.add_history("启动脚本", f"{len(ips)} 个节点")
+        self._nm.add_history("启动脚本", scope)
         InfoBar.success(
-            "已发送", f"启动指令已发送到 {len(ips)} 个节点",
+            "已发送", f"启动指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _rebootAllPC(self) -> None:
         """强制重启电脑"""
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not self._confirmDangerous(
+            "强制重启电脑",
+            f"即将强制重启 {scope} 电脑，所有未保存数据将丢失",
+        ):
+            return
         self._tcp.broadcast(ips, TcpCommand.REBOOT_PC)
-        self._nm.add_history("重启电脑", f"{len(ips)} 个节点")
+        self._nm.add_history("重启电脑", scope)
         InfoBar.success(
-            "已发送", f"重启指令已发送到 {len(ips)} 个节点",
+            "已发送", f"重启指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _stopExeOnAll(self) -> None:
         """停止脚本游戏"""
-        ips = self._getOnlineIPs()
+        ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not self._confirmDangerous(
+            "停止脚本游戏",
+            f"即将停止 {scope} 的脚本和游戏进程",
+        ):
+            return
         self._tcp.broadcast(ips, TcpCommand.STOP_EXE)
-        self._nm.add_history("停止脚本", f"{len(ips)} 个节点")
+        self._nm.add_history("停止脚本", scope)
         InfoBar.success(
-            "已发送", f"停止指令已发送到 {len(ips)} 个节点",
+            "已发送", f"停止指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    # ──────────────────────────────────────────────────────
+    # 节点右键菜单
+    # ──────────────────────────────────────────────────────
+
+    def _showNodeContextMenu(self, pos) -> None:
+        """节点表格右键菜单"""
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        name_item = self.table.item(row, 1)
+        ip_item = self.table.item(row, 2)
+        if not name_item or not ip_item:
+            return
+        machine_name = name_item.text()
+        ip = ip_item.text()
+        node = self._nm.nodes.get(machine_name)
+
+        menu = RoundMenu(parent=self.table)
+        # 复制操作
+        menu.addAction(Action(FIF.COPY, "复制 IP", triggered=lambda: self._copyText(ip)))
+        menu.addAction(
+            Action(FIF.COPY, "复制机器名", triggered=lambda: self._copyText(machine_name))
+        )
+        menu.addSeparator()
+
+        # 单节点命令（仅在线）
+        if node and node.status not in ("离线", "断连"):
+            menu.addAction(
+                Action(
+                    FIF.PLAY_SOLID,
+                    "启动/重启脚本",
+                    triggered=lambda: self._singleNodeCmd(
+                        ip, TcpCommand.START_EXE, "启动脚本"
+                    ),
+                )
+            )
+            menu.addAction(
+                Action(
+                    FIF.CLOSE,
+                    "停止脚本游戏",
+                    triggered=lambda: self._singleNodeCmd(
+                        ip, TcpCommand.STOP_EXE, "停止脚本"
+                    ),
+                )
+            )
+            menu.addSeparator()
+            menu.addAction(
+                Action(
+                    FIF.POWER_BUTTON,
+                    "重启电脑",
+                    triggered=lambda: self._singleNodeReboot(ip, machine_name),
+                )
+            )
+            menu.addSeparator()
+            # 账号绑定操作
+            bound = self._pool.get_account_for_machine(machine_name)
+            if bound:
+                menu.addAction(
+                    Action(
+                        FIF.REMOVE,
+                        "释放绑定账号",
+                        triggered=lambda: self._releaseNodeAccount(machine_name),
+                    )
+                )
+            else:
+                menu.addAction(
+                    Action(
+                        FIF.ADD,
+                        "分配账号",
+                        triggered=lambda: self._allocateNodeAccount(machine_name, ip),
+                    )
+                )
+
+        menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
+
+    def _copyText(self, text: str) -> None:
+        """复制文本到剪贴板"""
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+        InfoBar.success(
+            "已复制", text,
+            parent=self, position=InfoBarPosition.TOP, duration=1500,
+        )
+
+    def _singleNodeCmd(self, ip: str, cmd: TcpCommand, label: str) -> None:
+        """单节点发送命令"""
+        self._tcp.send(ip, cmd)
+        InfoBar.success(
+            "已发送", f"{label}指令 → {ip}",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
+    def _singleNodeReboot(self, ip: str, name: str) -> None:
+        """单节点重启（带确认）"""
+        if not self._confirmDangerous(
+            "重启电脑", f"即将强制重启 {name}，所有未保存数据将丢失"
+        ):
+            return
+        self._tcp.send(ip, TcpCommand.REBOOT_PC)
+        self._nm.add_history("重启电脑", name)
+        InfoBar.success(
+            "已发送", f"重启指令 → {name}",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
+    def _releaseNodeAccount(self, machine_name: str) -> None:
+        """释放节点绑定的账号"""
+        self._pool.release(machine_name)
+        InfoBar.success(
+            "已释放", f"{machine_name} 绑定账号已释放",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
+    def _allocateNodeAccount(self, machine_name: str, ip: str) -> None:
+        """为单节点分配账号"""
+        acc = self._pool.allocate(machine_name)
+        if acc is None:
+            InfoBar.warning(
+                "提示", "没有可分配的空闲账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        self._tcp.send(ip, TcpCommand.UPDATE_TXT, acc.to_line())
+        InfoBar.success(
+            "已分配", f"{machine_name} ← {acc.username}",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
     # ──────────────────────────────────────────────────────
