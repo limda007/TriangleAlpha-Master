@@ -10,6 +10,7 @@ class TestNodeInfo:
         assert node.ip == "10.1.3.51"
         assert node.status == "在线"
         assert node.group == "默认"
+        assert node.elapsed == "0"
 
     def test_is_online_within_threshold(self):
         node = NodeInfo(machine_name="VM-01", ip="10.1.3.51")

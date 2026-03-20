@@ -28,6 +28,7 @@ class LogReceiverThread(QThread):
     使用线程池并发处理连接，避免慢连接阻塞整个日志接收。
     """
 
+    # 跨线程传递 Python 对象：emit 后不得修改对象内容
     log_received = pyqtSignal(object)  # LogEntry
     error_occurred = pyqtSignal(str)
 
@@ -65,24 +66,32 @@ class LogReceiverThread(QThread):
         srv.close()
 
     def _handle_conn(self, conn: socket.socket) -> None:
-        """在线程池中处理单个客户端连接"""
+        """在线程池中处理单个客户端连接（支持持久连接多行日志）"""
+        MAX_BUF = 1024 * 1024  # 1MB 缓冲区上限，防 OOM
         try:
-            conn.settimeout(5.0)
-            data = b""
+            conn.settimeout(30.0)
+            buf = b""
             while True:
                 chunk = conn.recv(4096)
                 if not chunk:
                     break
-                data += chunk
-                if b"\n" in data:
+                buf += chunk
+                if len(buf) > MAX_BUF:
                     break
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="ignore").strip()
+                    if text:
+                        self._parse_line(text)
         except Exception:
             pass
         finally:
             conn.close()
-
-        for line in data.decode("utf-8", errors="ignore").strip().splitlines():
-            self._parse_line(line)
+        # 处理末尾无换行的残余
+        if buf:
+            text = buf.decode("utf-8", errors="ignore").strip()
+            if text:
+                self._parse_line(text)
 
     def _parse_line(self, line: str) -> None:
         # 格式: LOG|{machine_name}|{timestamp}|{level}|{content}

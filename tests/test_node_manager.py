@@ -41,6 +41,22 @@ class TestNodeManager:
         self.nm.handle_udp_message(msg_st, "10.1.3.51")
         assert self.nm.nodes["VM-01"].level == 18
         assert self.nm.nodes["VM-01"].jin_bi == "12450"
+        assert self.nm.nodes["VM-01"].elapsed == "0"  # 默认值
+
+    def test_handle_status_with_elapsed(self):
+        msg_on = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="Admin")
+        self.nm.handle_udp_message(msg_on, "10.1.3.51")
+        msg_st = UdpMessage(
+            type=UdpMessageType.STATUS,
+            machine_name="VM-01",
+            state="升级中",
+            level=18,
+            jin_bi="12450",
+            desc="正在升级",
+            elapsed="120",
+        )
+        self.nm.handle_udp_message(msg_st, "10.1.3.51")
+        assert self.nm.nodes["VM-01"].elapsed == "120"
 
     def test_check_timeouts(self):
         msg = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="Admin")

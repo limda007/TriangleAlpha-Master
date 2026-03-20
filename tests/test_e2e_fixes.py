@@ -202,78 +202,6 @@ class TestDeleteFileE2E:
             secret.unlink()
 
 
-# ── SENDFILE 完整链路 ──
-
-
-class TestSendFileE2E:
-    """验证文件传输完整流程"""
-
-    def test_sendfile_roundtrip(self, tmp_path):
-        port = _free_port()
-        content = b"Hello from master! This is test content."
-
-        async def run():
-            from slave.command_handler import CommandHandler
-
-            handler = CommandHandler(str(tmp_path), port=port)
-            server_task = asyncio.create_task(handler.run())
-            await asyncio.sleep(0.3)
-
-            r, w = await asyncio.open_connection("127.0.0.1", port)
-            # 发送 SENDFILE_START
-            w.write(b"SENDFILE_START|test_received.dat\n")
-            # 发送 CHUNK
-            encoded = base64.b64encode(content).decode()
-            w.write(f"SENDFILE_CHUNK|{encoded}\n".encode())
-            # 发送 END
-            w.write(b"SENDFILE_END|\n")
-            await w.drain()
-            w.close()
-            await w.wait_closed()
-
-            await asyncio.sleep(0.3)
-
-            f = tmp_path / "test_received.dat"
-            assert f.exists()
-            assert f.read_bytes() == content
-
-            server_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await server_task
-
-        asyncio.run(run())
-
-    def test_sendfile_traversal_rejected(self, tmp_path):
-        """SENDFILE 路径遍历应被拒绝"""
-        port = _free_port()
-
-        async def run():
-            from slave.command_handler import CommandHandler
-
-            handler = CommandHandler(str(tmp_path), port=port)
-            server_task = asyncio.create_task(handler.run())
-            await asyncio.sleep(0.3)
-
-            r, w = await asyncio.open_connection("127.0.0.1", port)
-            w.write(b"SENDFILE_START|../malicious.txt\n")
-            w.write(b"SENDFILE_CHUNK|" + base64.b64encode(b"hacked").decode().encode() + b"\n")
-            w.write(b"SENDFILE_END|\n")
-            await w.drain()
-            w.close()
-            await w.wait_closed()
-
-            await asyncio.sleep(0.3)
-
-            # 恶意文件不应被创建
-            assert not (tmp_path.parent / "malicious.txt").exists()
-
-            server_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await server_task
-
-        asyncio.run(run())
-
-
 # ── 日志消息格式 ──
 
 
@@ -343,18 +271,15 @@ class TestProtocolCompatibility:
     """验证所有 TcpCommand 枚举值在 slave 有对应 handler"""
 
     def test_all_commands_have_handlers(self):
-        """每个 TcpCommand 的 value 都应在 slave _dispatch 或其子方法中被处理"""
+        """每个 TcpCommand 的 value 都应在 slave _dispatch 中被处理"""
         import inspect
 
         from slave.command_handler import CommandHandler
 
         dispatch_source = inspect.getsource(CommandHandler._dispatch)
-        # SENDFILE_CHUNK / SENDFILE_END 是 _handle_sendfile 内的子协议，不在 _dispatch 顶层
-        sendfile_source = inspect.getsource(CommandHandler._handle_sendfile)
-        combined = dispatch_source + sendfile_source
 
         for cmd in TcpCommand:
-            assert cmd.value in combined, f"TcpCommand.{cmd.name} ({cmd.value}) 在处理链中无对应 handler"
+            assert cmd.value in dispatch_source, f"TcpCommand.{cmd.name} ({cmd.value}) 在 _dispatch 中无对应 handler"
 
     def test_build_and_parse_roundtrip(self):
         """构建 TCP 命令 → 解码验证"""

@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from common.models import NodeInfo, OperationRecord
-from common.protocol import DISCONNECT_TIMEOUT, OFFLINE_TIMEOUT, UdpMessage, UdpMessageType
+from common.protocol import DISCONNECT_TIMEOUT, GameState, OFFLINE_TIMEOUT, UdpMessage, UdpMessageType
 
 _MAX_HISTORY = 1000
 
@@ -18,6 +18,7 @@ class NodeManager(QObject):
     node_updated = pyqtSignal(str)   # machine_name — 节点信息更新
     node_online = pyqtSignal(str)    # machine_name — 新节点上线
     node_offline = pyqtSignal(str)   # machine_name — 节点离线
+    node_status_reported = pyqtSignal(str)  # machine_name — 仅 STATUS 消息触发
     stats_changed = pyqtSignal()     # 统计数据变化
     history_changed = pyqtSignal()   # 操作历史变化 (M1)
 
@@ -184,14 +185,24 @@ class NodeManager(QObject):
             self.nodes[name] = NodeInfo(machine_name=name, ip=remote_ip)
             self.node_online.emit(name)
         node = self.nodes[name]
-        node.status = msg.state if msg.state else node.status
-        node.level = msg.level
-        node.jin_bi = msg.jin_bi
-        # desc 字段携带当前挂机的游戏账号名
-        if msg.desc:
-            node.current_account = msg.desc
+        # 写入 game_state 而非 status（status 由心跳和超时管理）
+        if msg.state == GameState.SCRIPT_STOPPED:
+            node.game_state = ""
+            node.current_account = ""
+            node.level = 0
+            node.jin_bi = "0"
+            node.elapsed = "0"
+        else:
+            node.game_state = msg.state if msg.state else node.game_state
+            node.level = msg.level
+            node.jin_bi = msg.jin_bi
+            node.elapsed = msg.elapsed
+            # desc 字段携带当前挂机的游戏账号名
+            if msg.desc:
+                node.current_account = msg.desc
         node.last_seen = datetime.now()
         node.last_status_update = datetime.now()
         self.node_updated.emit(name)
+        self.node_status_reported.emit(name)
         self._recalc_online()
         self._schedule_stats()

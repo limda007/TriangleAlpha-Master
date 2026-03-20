@@ -9,7 +9,7 @@ import pytest
 
 from common.models import AccountStatus
 from common.protocol import TcpCommand
-from master.app.core.account_pool import AccountPool
+from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 
 # ── C1: themeMode 配置项 ──
@@ -37,19 +37,21 @@ class TestC1ThemeMode:
 
 
 class TestC2FileErrorHandling:
-    """验证 AccountPool.load_from_file 对不存在文件抛出 OSError"""
+    """验证 AccountDB.load_from_file 对不存在文件抛出 OSError"""
 
     def test_load_from_nonexistent_file(self, tmp_path):
-        pool = AccountPool()
+        pool = AccountDB(tmp_path / "test.db")
         with pytest.raises(OSError, match="无法读取账号文件"):
             pool.load_from_file(tmp_path / "not_exist.txt")
+        pool.close()
 
     def test_load_from_valid_file(self, tmp_path):
         f = tmp_path / "accounts.txt"
         f.write_text("user1----pass1\nuser2----pass2", encoding="utf-8")
-        pool = AccountPool()
+        pool = AccountDB(tmp_path / "test.db")
         pool.load_from_file(f)
         assert pool.total_count == 2
+        pool.close()
 
 
 # ── C3: TCP socket 关闭 ──
@@ -196,29 +198,36 @@ class TestM2SignalBusDeleted:
 class TestM7ExportTimestamp:
     """验证 export_completed 包含完成时间"""
 
-    def test_export_includes_timestamp(self):
-        pool = AccountPool()
-        pool.load_from_text("user1----pass1\nuser2----pass2")
-        # 模拟完成
-        pool.accounts[0].status = AccountStatus.COMPLETED
-        pool.accounts[0].level = 30
-        pool.accounts[0].completed_at = datetime(2026, 3, 18, 14, 30)
-        pool._rebuild_index()
+    def test_export_includes_timestamp(self, tmp_path):
+        pool = AccountDB(tmp_path / "test.db")
+        pool.import_fresh("user1----pass1\nuser2----pass2")
+        pool.allocate("VM-01")
+        pool.complete("VM-01", level=30)
+        # 直接 SQL 设置精确时间戳（complete() 使用 datetime.now()）
+        pool._conn.execute(
+            "UPDATE accounts SET completed_at='2026-03-18 14:30:00' WHERE username='user1'"
+        )
+        pool._conn.commit()
 
         result = pool.export_completed()
-        # 导出格式: 账号----密码----邮箱----邮箱密码----等级----金币----状态----登录时间----登出时间
         assert "2026-03-18 14:30:00" in result
         assert "----30----" in result
+        pool.close()
 
-    def test_export_without_completed_at(self):
-        pool = AccountPool()
-        pool.load_from_text("user1----pass1")
-        pool.accounts[0].status = AccountStatus.COMPLETED
-        pool.accounts[0].completed_at = None
-        pool._rebuild_index()
+    def test_export_without_completed_at(self, tmp_path):
+        pool = AccountDB(tmp_path / "test.db")
+        pool.import_fresh("user1----pass1")
+        pool.allocate("VM-01")
+        # 直接 SQL 设置已完成但无时间
+        pool._conn.execute(
+            "UPDATE accounts SET status='已完成', completed_at=NULL WHERE username='user1'"
+        )
+        pool._conn.commit()
+        pool._refresh_counts()
 
         result = pool.export_completed()
-        assert "----无" in result  # completed_at=None 时输出 "无"
+        assert "----无" in result
+        pool.close()
 
 
 # ── M10-fix: history 上限 ──

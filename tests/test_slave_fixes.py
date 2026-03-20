@@ -58,7 +58,7 @@ class TestC6ProcessHandle:
         from slave.process_manager import ProcessManager
 
         pm = ProcessManager(str(tmp_path))
-        (tmp_path / "TestDemo.exe").write_text("fake")
+        (tmp_path / "TriangleAlpha.Launcher.exe").write_text("fake")
         mock_proc = MagicMock()
 
         async def run():
@@ -66,7 +66,7 @@ class TestC6ProcessHandle:
                 patch.object(pm, "kill_by_name", new_callable=AsyncMock, return_value=0),
                 patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc),
             ):
-                result = await pm.start_testdemo()
+                result = await pm.start_launcher()
                 assert result is True
                 assert pm._process is mock_proc
 
@@ -163,8 +163,7 @@ class TestH7SlaveExtQuery:
 
     def test_remaining_commands(self):
         expected = {"UPDATE_TXT", "START_EXE", "STOP_EXE", "REBOOT_PC",
-                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP",
-                    "SENDFILE_START", "SENDFILE_CHUNK", "SENDFILE_END"}
+                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP"}
         assert {m.name for m in TcpCommand} == expected
 
 
@@ -227,16 +226,11 @@ class TestH10CommandInjection:
 
 
 class TestM4FileSizeLimit:
-    """验证 CommandHandler 文件大小限制"""
+    """验证 CommandHandler 使用 STREAM_LIMIT"""
 
-    def test_max_file_size(self):
+    def test_stream_limit(self):
         from slave.command_handler import CommandHandler
-        assert CommandHandler.MAX_FILE_SIZE == 100 * 1024 * 1024
-
-    def test_max_file_size_in_sendfile_handler(self):
-        from slave.command_handler import CommandHandler
-        source = inspect.getsource(CommandHandler._handle_sendfile)
-        assert "MAX_FILE_SIZE" in source, "_handle_sendfile 应检查 MAX_FILE_SIZE"
+        assert CommandHandler.STREAM_LIMIT == 1024 * 1024
 
 
 # ── H11: Slave 单实例保护 ──
@@ -316,7 +310,10 @@ class TestH11SlaveSingleInstance:
 
         mock_qapp.assert_called_once()
         mock_app.setQuitOnLastWindowClosed.assert_called_once_with(False)
-        mock_lock.assert_called_once_with(tmp_path / ".slave.pid")
+        mock_lock.assert_called_once()
+        # 锁文件路径在系统临时目录
+        actual_path = mock_lock.call_args[0][0]
+        assert actual_path.name == "TriangleAlphaSlave.pid"
         mock_warning.assert_called_once_with(
             None,
             "TA-Slave",
@@ -327,7 +324,8 @@ class TestH11SlaveSingleInstance:
         mock_backend.assert_not_called()
         mock_app.exec.assert_not_called()
 
-    def test_main_exits_when_backend_does_not_stop(self, tmp_path):
+    def test_main_warns_when_backend_does_not_stop(self, tmp_path, capsys):
+        """backend.wait 超时时应打印警告而非 raise"""
         import pytest
 
         from slave.main import main
@@ -345,10 +343,13 @@ class TestH11SlaveSingleInstance:
             patch("slave.main._read_master_ip", return_value=None),
             patch("slave.main.SlaveWindow", return_value=MagicMock()),
             patch("slave.main.SlaveBackend", return_value=mock_backend),
-            pytest.raises(RuntimeError, match="SlaveBackend did not stop within 5 seconds"),
+            pytest.raises(SystemExit),
         ):
             main()
 
         mock_backend.stop.assert_called_once()
         mock_backend.wait.assert_called_once_with(5000)
-        mock_lock.release.assert_not_called()
+        # 超时后仍应释放锁
+        mock_lock.release.assert_called_once()
+        captured = capsys.readouterr()
+        assert "SlaveBackend" in captured.out

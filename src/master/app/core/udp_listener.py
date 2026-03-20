@@ -11,6 +11,7 @@ from common.protocol import UDP_PORT, parse_udp_message
 class UdpListenerThread(QThread):
     """后台线程，绑定 UDP 端口接收被控端广播消息"""
 
+    # 跨线程传递 Python 对象：emit 后不得修改对象内容
     message_received = pyqtSignal(object, str)  # (UdpMessage, remote_ip)
 
     def __init__(self, port: int = UDP_PORT, parent: QThread | None = None) -> None:

@@ -23,7 +23,7 @@ a = Analysis(
         'master.app.core.tcp_commander',
         'master.app.core.udp_listener',
         'master.app.core.log_receiver',
-        'master.app.core.account_pool',
+        'master.app.core.account_db',
         'master.app.components.stat_card',
         'common.protocol',
         'common.models',

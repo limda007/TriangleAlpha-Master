@@ -23,6 +23,12 @@ class TestParseUdp:
         assert msg.level == 18
         assert msg.jin_bi == "12450"
         assert msg.desc == "正在升级"
+        assert msg.elapsed == "0"  # 6 段兼容默认值
+
+    def test_parse_status_with_elapsed(self):
+        msg = parse_udp_message("STATUS|VM-01|升级中|18|12450|正在升级|120")
+        assert msg is not None
+        assert msg.elapsed == "120"
 
     def test_parse_offline(self):
         msg = parse_udp_message("OFFLINE|VM-01")
@@ -45,7 +51,9 @@ class TestBuildUdp:
         assert build_udp_online("VM-01", "Admin") == "ONLINE|VM-01|Admin"
 
     def test_build_status(self):
-        assert build_udp_status("VM-01", "升级中", 18, "12450", "正在升级") == "STATUS|VM-01|升级中|18|12450|正在升级"
+        assert build_udp_status("VM-01", "升级中", 18, "12450", "正在升级") == "STATUS|VM-01|升级中|18|12450|正在升级|0"
+        result = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120")
+        assert result == "STATUS|VM-01|升级中|18|12450|正在升级|120"
 
 
 class TestBuildTcp:

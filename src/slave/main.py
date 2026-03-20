@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import psutil
@@ -87,8 +88,8 @@ def main() -> None:
 
     base_dir = _get_base_dir()
 
-    # 单实例保护：原子锁文件
-    pid_path = base_dir / ".slave.pid"
+    # 单实例保护：全局锁文件（放在系统临时目录，不受工作目录影响）
+    pid_path = Path(tempfile.gettempdir()) / "TriangleAlphaSlave.pid"
     instance_lock = acquire_instance_lock(pid_path)
     if instance_lock is None:
         QMessageBox.warning(None, "TA-Slave", "已有实例在运行中，请勿重复启动。")
@@ -116,7 +117,7 @@ def main() -> None:
     finally:
         backend.stop()
         if not backend.wait(5000):
-            raise RuntimeError("SlaveBackend did not stop within 5 seconds")
+            print("[警告] SlaveBackend 未在 5 秒内停止")
         instance_lock.release()
     sys.exit(exit_code)
 

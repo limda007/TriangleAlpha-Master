@@ -21,6 +21,13 @@ class UdpMessageType(enum.Enum):
     EXT_ONLINE = "EXT_ONLINE"
 
 
+class GameState:
+    """TestDemo.exe STATUS 消息的 state 字段约定值"""
+    COMPLETED = "已完成"
+    RUNNING = "运行中"
+    SCRIPT_STOPPED = "脚本已停止"  # slave 检测到 TestDemo 停止时上报
+
+
 @dataclass
 class UdpMessage:
     type: UdpMessageType
@@ -30,6 +37,7 @@ class UdpMessage:
     level: int = 0
     jin_bi: str = "0"
     desc: str = ""
+    elapsed: str = "0"  # 运行时间（分钟或秒，由 TestDemo 上报）
     cpu_percent: float = 0.0
     mem_percent: float = 0.0
     slave_version: str = ""
@@ -53,6 +61,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
             level=int(parts[3]) if parts[3].isdigit() else 0,
             jin_bi=parts[4],
             desc=parts[5],
+            elapsed=parts[6] if len(parts) >= 7 else "0",
         )
     elif t == "EXT_ONLINE" and len(parts) >= 7:
         return UdpMessage(
@@ -67,7 +76,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
     return None
 
 
-def build_udp_online(machine_name: str, user_name: str) -> str:
+def build_udp_online(machine_name: str, user_name: str) -> str:  # legacy: 仅测试使用，生产环境由 EXT_ONLINE 替代
     return f"ONLINE|{machine_name}|{user_name}"
 
 
@@ -79,8 +88,8 @@ def build_udp_offline(machine_name: str) -> str:
     return f"OFFLINE|{machine_name}"
 
 
-def build_udp_status(machine_name: str, state: str, level: int, jin_bi: str, desc: str) -> str:
-    return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}"
+def build_udp_status(machine_name: str, state: str, level: int, jin_bi: str, desc: str, elapsed: str = "0") -> str:
+    return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}|{elapsed}"
 
 
 class TcpCommand(enum.Enum):
@@ -91,10 +100,6 @@ class TcpCommand(enum.Enum):
     UPDATE_KEY = "UPDATEKEY"
     DELETE_FILE = "DELETEFILE"
     EXT_SET_GROUP = "EXT_SETGROUP"
-    # H5: 文件传输协议补充定义
-    SENDFILE_START = "SENDFILE_START"
-    SENDFILE_CHUNK = "SENDFILE_CHUNK"
-    SENDFILE_END = "SENDFILE_END"
 
 
 def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:

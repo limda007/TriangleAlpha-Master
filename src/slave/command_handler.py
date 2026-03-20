@@ -5,8 +5,7 @@ import asyncio
 import base64
 import binascii
 import os
-import tempfile
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from pathlib import Path
 
 from common.protocol import TCP_CMD_PORT
@@ -14,8 +13,6 @@ from slave.process_manager import ProcessManager
 
 
 class CommandHandler:
-    # 文件接收最大限制
-    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
     # H1: readline 缓冲区限制（1MB，支持大量账号的 base64 payload）
     STREAM_LIMIT = 1024 * 1024
 
@@ -115,7 +112,7 @@ class CommandHandler:
         elif text.startswith("STARTEXE|"):
             desc = "启动脚本"
             print(f"[指令] {desc}")
-            await self._pm.start_testdemo()
+            await self._pm.start_launcher()
 
         elif text.startswith("STOPEXE|"):
             desc = "停止脚本"
@@ -137,9 +134,7 @@ class CommandHandler:
         elif text.startswith("EXT_SETGROUP|"):
             desc = self._handle_set_group(text)
 
-        elif text.startswith("SENDFILE_START|"):
-            desc = await self._handle_sendfile(text, reader)
-
+        # 注意: 文件下发使用 UPDATE_TXT 通道（base64 编码），无独立 SENDFILE 协议
         else:
             print(f"[未知指令] {text[:50]}")
 
@@ -207,58 +202,3 @@ class CommandHandler:
         if self._on_group_changed:
             self._on_group_changed(group)
         return desc
-
-    async def _handle_sendfile(self, text: str, reader: asyncio.StreamReader) -> str:
-        """处理文件接收指令
-
-        C4: 先写临时文件，完整接收并校验后原子 rename，防止 TOCTOU。
-        """
-        filename = text.split("|", 1)[1]
-        save_path = self._safe_path(filename)
-        if save_path is None:
-            return ""
-
-        print(f"[接收] 开始接收文件: {filename}")
-        total_size = 0
-        # C4: 写入临时文件，成功后原子替换
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(self._base_dir), prefix=".recv_", suffix=".tmp",
-        )
-        try:
-            with open(tmp_fd, "wb") as f:
-                async for chunk_line in self._read_chunks(reader):
-                    if chunk_line.startswith("SENDFILE_CHUNK|"):
-                        try:
-                            chunk_data = base64.b64decode(chunk_line[len("SENDFILE_CHUNK|"):])
-                        except binascii.Error:
-                            print("[错误] SENDFILE_CHUNK 解码失败")
-                            break
-                        total_size += len(chunk_data)
-                        # C4: 先检查大小，再写入
-                        if total_size > self.MAX_FILE_SIZE:
-                            print(f"[拒绝] 文件超过大小限制: {total_size} > {self.MAX_FILE_SIZE}")
-                            break
-                        f.write(chunk_data)
-                    elif chunk_line.startswith("SENDFILE_END|"):
-                        break
-
-            if total_size > self.MAX_FILE_SIZE:
-                Path(tmp_path).unlink(missing_ok=True)
-                return ""
-
-            # C4: 原子替换目标文件
-            Path(tmp_path).replace(save_path)
-            print(f"[接收] 文件完成: {filename} ({total_size} bytes)")
-            return f"文件: {filename}"
-
-        except Exception as e:
-            Path(tmp_path).unlink(missing_ok=True)
-            print(f"[错误] 文件接收异常: {e}")
-            return ""
-
-    async def _read_chunks(self, reader: asyncio.StreamReader) -> AsyncIterator[str]:
-        while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=60)
-            if not line:
-                break
-            yield line.decode("utf-8", errors="replace").strip()

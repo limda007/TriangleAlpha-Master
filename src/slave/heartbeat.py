@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import psutil
 
-from common.protocol import HEARTBEAT_INTERVAL, UDP_PORT, build_udp_ext_online, build_udp_offline
+from common.protocol import HEARTBEAT_INTERVAL, UDP_PORT, build_udp_ext_online, build_udp_offline, build_udp_status
 
 SLAVE_VERSION = "2.0.0"
 
@@ -40,6 +40,17 @@ class HeartbeatService:
 
     def set_group(self, group: str) -> None:
         self._group = group
+
+    def send_status(self, state: str, level: int = 0,
+                    jin_bi: str = "0", desc: str = "",
+                    elapsed: str = "0") -> None:
+        """发送 STATUS 消息到 master（独立阻塞 UDP socket，不复用心跳 async socket）"""
+        msg = build_udp_status(self._machine_name, state, level, jin_bi, desc, elapsed)
+        data = msg.encode("utf-8")
+        target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(data, target)
 
     async def run(self) -> None:
         self._running = True

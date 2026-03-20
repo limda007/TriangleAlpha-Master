@@ -68,7 +68,7 @@ class MainWindow(FluentWindow):
         self.nodeManager.node_online.connect(self._onNodeReconnect)
 
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
-        self.nodeManager.node_updated.connect(self._syncAccountFromNode)
+        self.nodeManager.node_status_reported.connect(self._syncAccountFromNode)
 
     def _initNavigation(self):
         self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
@@ -133,8 +133,8 @@ class MainWindow(FluentWindow):
     def _syncAccountFromNode(self, machine_name: str) -> None:
         """slave STATUS 上报 → 同步等级/金币/状态到 AccountDB"""
         node = self.nodeManager.nodes.get(machine_name)
-        if not node or not node.current_account:
+        if not node:
             return
         self.accountPool.update_from_status(
-            machine_name, node.level, node.jin_bi, node.status,
+            machine_name, node.level, node.jin_bi, node.game_state,
         )

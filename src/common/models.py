@@ -7,9 +7,10 @@ from datetime import datetime
 
 
 class AccountStatus(enum.Enum):
-    IDLE = "空闲"
-    IN_USE = "使用中"
+    IDLE = "空闲中"
+    IN_USE = "运行中"
     COMPLETED = "已完成"
+    FETCHED = "已取号"
 
 
 @dataclass
@@ -20,6 +21,7 @@ class NodeInfo:
     status: str = "在线"
     level: int = 0
     jin_bi: str = "0"
+    elapsed: str = "0"  # 运行时间
     current_account: str = ""
     group: str = "默认"
     cpu_percent: float = 0.0
@@ -27,6 +29,7 @@ class NodeInfo:
     slave_version: str = ""
     last_seen: datetime = field(default_factory=datetime.now)
     last_status_update: datetime = field(default_factory=datetime.now)
+    game_state: str = ""  # TestDemo 上报的游戏状态（运行中/已完成/脚本已停止）
 
     def is_online(self, timeout_sec: int = 15) -> bool:
         return (datetime.now() - self.last_seen).total_seconds() < timeout_sec
@@ -50,6 +53,8 @@ class AccountInfo:
     level: int = 0
     jin_bi: str = "0"
     completed_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
 
     @classmethod
     def from_line(cls, line: str) -> AccountInfo:

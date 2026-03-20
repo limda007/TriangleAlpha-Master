@@ -12,17 +12,17 @@ from common.protocol import (
     build_udp_status,
     parse_udp_message,
 )
-from master.app.core.account_pool import AccountPool
+from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 
 
-class TestNodeManagerAccountPoolIntegration:
-    """NodeManager + AccountPool 协作"""
+class TestNodeManagerAccountDBIntegration:
+    """NodeManager + AccountDB 协作"""
 
-    def test_account_allocation_for_requesting_node(self):
+    def test_account_allocation_for_requesting_node(self, tmp_path):
         nm = NodeManager()
-        pool = AccountPool()
-        pool.load_from_text("user1----pass1\nuser2----pass2\nuser3----pass3")
+        pool = AccountDB(tmp_path / "test.db")
+        pool.import_fresh("user1----pass1\nuser2----pass2\nuser3----pass3")
 
         # 模拟 3 个节点上线
         for i in range(3):
@@ -41,12 +41,13 @@ class TestNodeManagerAccountPoolIntegration:
         pool.complete("VM-00", level=18)
         assert pool.completed_count == 1
         assert pool.in_use_count == 2
+        pool.close()
 
-    def test_node_timeout_releases_do_not_auto_release_accounts(self):
+    def test_node_timeout_releases_do_not_auto_release_accounts(self, tmp_path):
         """节点离线后账号不会自动释放"""
         nm = NodeManager()
-        pool = AccountPool()
-        pool.load_from_text("user1----pass1")
+        pool = AccountDB(tmp_path / "test.db")
+        pool.import_fresh("user1----pass1")
 
         msg = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="Admin")
         nm.handle_udp_message(msg, "10.1.3.1")
@@ -59,6 +60,7 @@ class TestNodeManagerAccountPoolIntegration:
         assert nm.nodes["VM-01"].status == "离线"
         # 账号仍然 IN_USE（不会自动释放）
         assert pool.in_use_count == 1
+        pool.close()
 
 
 class TestProtocolRoundTrip:
@@ -86,6 +88,14 @@ class TestProtocolRoundTrip:
         assert msg.type == UdpMessageType.STATUS
         assert msg.level == 18
         assert msg.jin_bi == "12450"
+        assert msg.elapsed == "0"  # 默认 elapsed
+
+    def test_status_roundtrip_with_elapsed(self):
+        raw = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "360")
+        msg = parse_udp_message(raw)
+        assert msg.type == UdpMessageType.STATUS
+        assert msg.level == 18
+        assert msg.elapsed == "360"
 
     def test_tcp_update_txt_roundtrip(self):
         import base64
@@ -115,12 +125,14 @@ class TestNodeManagerMultiMessage:
                 level=15,
                 jin_bi="8000",
                 desc="正常运行",
+                elapsed="45",
             ),
             "10.1.3.1",
         )
         node = nm.nodes["VM-01"]
         assert node.level == 15
         assert node.jin_bi == "8000"
+        assert node.elapsed == "45"
 
     def test_ext_online_updates_system_info(self):
         nm = NodeManager()

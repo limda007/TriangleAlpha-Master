@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QSpinBox,
+    QSplitter,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -42,13 +43,13 @@ from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 
-_NODE_HEADERS = ["", "机器名", "IP地址", "挂机账号", "等级", "金币", "运行状态"]
+_NODE_HEADERS = ["", "机器名", "IP地址", "挂机账号", "等级", "金币", "运行时间", "运行状态"]
 
 # 操作按钮配置: (文本, FluentIcon, objectName)
 _ACTION_BUTTONS = [
     ("分发账号", FIF.SEND, "btnDistAccounts"),
     ("提取合格出货", FIF.COMPLETED, "btnExport"),
-    ("一键下发文件", FIF.SEND_FILL, "btnSendFile"),
+    ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
     ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
     ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
     ("启动/重启脚本", FIF.PLAY_SOLID, "btnStartExe"),
@@ -115,7 +116,6 @@ class BigScreenInterface(ScrollArea):
 
         # ═══ 节点实时表格 ═══
         self.table = self._buildNodeTable()
-        root.addWidget(self.table, stretch=6)
 
         # ═══ 底部区域：账号池 + 操作按钮 ═══
         bottom = QHBoxLayout()
@@ -129,8 +129,16 @@ class BigScreenInterface(ScrollArea):
 
         bottomWidget = QWidget(self)
         bottomWidget.setLayout(bottom)
-        bottomWidget.setFixedHeight(280)
-        root.addWidget(bottomWidget)
+
+        # ═══ 可拖拽分割器：节点表格 ↔ 底部区域 ═══
+        splitter = QSplitter(Qt.Orientation.Vertical, self.view)
+        splitter.addWidget(self.table)
+        splitter.addWidget(bottomWidget)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 4)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
+        root.addWidget(splitter)
 
         self.setWidget(self.view)
         self.setWidgetResizable(True)
@@ -153,17 +161,9 @@ class BigScreenInterface(ScrollArea):
         self._nm.node_offline.connect(self._scheduleRefreshTable)
         self._nm.stats_changed.connect(self._refreshHeader)
         self._pool.pool_changed.connect(self._refreshAccountStats)
-        self._pool.pool_changed.connect(self._syncAccountEditFromPool)
+        self._pool.pool_changed.connect(self._refreshAccountTable)
 
         self._tcp.command_failed.connect(self._onCmdFailed)
-
-        # 账号池文本编辑 → AccountPool 双向同步
-        self._syncing = False  # 防循环
-        self._debounceTimer = QTimer(self)
-        self._debounceTimer.setSingleShot(True)
-        self._debounceTimer.setInterval(300)
-        self._debounceTimer.timeout.connect(self._syncAccountEditToPool)
-        self.accountEdit.textChanged.connect(self._onAccountEditChanged)
 
         # 运行时长定时器
         self._uptimeTimer = QTimer(self)
@@ -175,7 +175,7 @@ class BigScreenInterface(ScrollArea):
         self._watchdogTimer.timeout.connect(self._checkStaleNodes)
 
         # 启动时从 DB 同步数据到 UI
-        self._syncAccountEditFromPool()
+        self._refreshAccountTable()
         self._refreshAccountStats()
 
     # ──────────────────────────────────────────────────────
@@ -259,7 +259,7 @@ class BigScreenInterface(ScrollArea):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        for col in (4, 5, 6):
+        for col in (4, 5, 6, 7):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -275,7 +275,7 @@ class BigScreenInterface(ScrollArea):
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
 
-        # 标题行带图标
+        # 标题行带图标 + 上传按钮
         titleRow = QHBoxLayout()
         titleRow.setSpacing(6)
         icon_lbl = QLabel(panel)
@@ -285,22 +285,34 @@ class BigScreenInterface(ScrollArea):
         lbl.setObjectName("panelTitle")
         titleRow.addWidget(lbl)
         titleRow.addStretch()
+        btnUpload = PushButton(FIF.ADD, "上传账号", panel)
+        btnUpload.setFixedHeight(28)
+        btnUpload.clicked.connect(self._showImportDialog)
+        titleRow.addWidget(btnUpload)
         layout.addLayout(titleRow)
 
-        self.accountEdit = PlainTextEdit(panel)
-        self.accountEdit.setObjectName("accountEdit")
-        self.accountEdit.setPlaceholderText(
-            "粘贴账号，每行一个\n格式: 账号----密码----邮箱----邮箱密码----[备注]"
-        )
-        self.accountEdit.setSizePolicy(
+        # 账号表格（替代文本框）
+        _POOL_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
+        self.accountTable = TableWidget(panel)
+        self.accountTable.setColumnCount(len(_POOL_HEADERS))
+        self.accountTable.setHorizontalHeaderLabels(_POOL_HEADERS)
+        self.accountTable.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
+        self.accountTable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.accountTable.setAlternatingRowColors(True)
+        self.accountTable.verticalHeader().hide()
+        header = self.accountTable.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, len(_POOL_HEADERS)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self.accountTable.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        layout.addWidget(self.accountEdit, stretch=1)
+        layout.addWidget(self.accountTable, stretch=1)
 
         # 底部: 统计 + 超时监控
         footLayout = QHBoxLayout()
         footLayout.setSpacing(8)
-        self._lblPoolStats = QLabel("总数:0  可用:0  使用中:0  已完成:0", panel)
+        self._lblPoolStats = QLabel("总数:0  可用:0  运行中:0  已完成:0", panel)
         self._lblPoolStats.setObjectName("poolStats")
         footLayout.addWidget(self._lblPoolStats)
         footLayout.addStretch()
@@ -390,7 +402,8 @@ class BigScreenInterface(ScrollArea):
             node.current_account or "--",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
-            node.status,
+            node.elapsed if node.elapsed != "0" else "--",
+            node.game_state if node.game_state else node.status,
         ]
 
         # 状态列：彩色圆点图标
@@ -415,7 +428,7 @@ class BigScreenInterface(ScrollArea):
                 item.setText(text)
 
         # 运行状态列着色
-        state_item = self.table.item(row, 6)
+        state_item = self.table.item(row, 7)
         if state_item:
             color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
             state_item.setForeground(color)
@@ -443,32 +456,50 @@ class BigScreenInterface(ScrollArea):
         p = self._pool
         self._lblPoolStats.setText(
             f"总数:{p.total_count}  可用:{p.available_count}  "
-            f"使用中:{p.in_use_count}  已完成:{p.completed_count}"
+            f"运行中:{p.in_use_count}  已完成:{p.completed_count}"
         )
         self._refreshHeader()
+        # 动态更新"提取合格出货"按钮文案
+        btn = self._actionBtns[1]
+        count = p.completed_count
+        btn.setText(f"提取合格出货 ({count})" if count else "提取合格出货")
 
-    def _syncAccountEditFromPool(self) -> None:
-        """AccountDB 变化 → 更新文本框"""
-        if self._syncing:
-            return
-        self._syncing = True
-        lines = [acc.to_line() for acc in self._pool.get_all_accounts()]
-        self.accountEdit.setPlainText("\n".join(lines))
-        self._syncing = False
+    def _refreshAccountTable(self) -> None:
+        """从 AccountDB 刷新账号表格"""
+        accounts = self._pool.get_all_accounts()
+        self.accountTable.setRowCount(len(accounts))
+        _MASK = "••••••••"
+        for row, acc in enumerate(accounts):
+            self.accountTable.setItem(row, 0, QTableWidgetItem(acc.username))
+            self.accountTable.setItem(row, 1, QTableWidgetItem(_MASK))
+            self.accountTable.setItem(row, 2, QTableWidgetItem(acc.bind_email))
+            self.accountTable.setItem(row, 3, QTableWidgetItem(_MASK if acc.bind_email_password else ""))
+            self.accountTable.setItem(row, 4, QTableWidgetItem(acc.status.value))
+            self.accountTable.setItem(row, 5, QTableWidgetItem(acc.assigned_machine))
+            self.accountTable.setItem(row, 6, QTableWidgetItem(str(acc.level) if acc.level else ""))
+            self.accountTable.setItem(row, 7, QTableWidgetItem(acc.jin_bi if acc.jin_bi != "0" else ""))
+            created_str = acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else ""
+            self.accountTable.setItem(row, 8, QTableWidgetItem(created_str))
+            time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
+            self.accountTable.setItem(row, 9, QTableWidgetItem(time_str))
 
-    def _onAccountEditChanged(self) -> None:
-        """文本框编辑 → 防抖同步到 AccountPool"""
-        if self._syncing:
-            return
-        self._debounceTimer.start()
-
-    def _syncAccountEditToPool(self) -> None:
-        """防抖触发：全量同步到 AccountDB"""
-        if self._syncing:
-            return
-        self._syncing = True
-        self._pool.import_fresh(self.accountEdit.toPlainText())
-        self._syncing = False
+    def _showImportDialog(self) -> None:
+        """弹窗导入账号"""
+        dlg = MessageBox("上传账号", "每行一个，格式: 账号----密码----邮箱----邮箱密码----[备注]", self.window())
+        edit = PlainTextEdit(dlg)
+        edit.setPlaceholderText("粘贴账号文本...")
+        edit.setMinimumHeight(200)
+        dlg.textLayout.addWidget(edit)
+        dlg.yesButton.setText("导入")
+        dlg.cancelButton.setText("取消")
+        if dlg.exec():
+            text = edit.toPlainText().strip()
+            if text:
+                self._pool.load_from_text(text)
+                InfoBar.success(
+                    "导入成功", "已导入账号",
+                    parent=self, position=InfoBarPosition.TOP, duration=3000,
+                )
 
     # ──────────────────────────────────────────────────────
     # 操作按钮
@@ -566,7 +597,7 @@ class BigScreenInterface(ScrollArea):
         if not path:
             return
         try:
-            text = self._pool.export_completed()
+            text = self._pool.export_completed(mark_fetched=True)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
         except OSError as e:
@@ -575,14 +606,15 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
+        exported = len(text.splitlines()) - 1  # 减去表头
         InfoBar.success(
-            "导出成功", f"已导出 {self._pool.completed_count} 个账号",
+            "导出成功", f"已导出 {exported} 个账号",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
     def _sendFileToAll(self) -> None:
-        """一键下发文件"""
-        path, _ = QFileDialog.getOpenFileName(self, "选择文件")
+        """下发账号文件 — 通过 UPDATE_TXT 覆盖 slave 端 accounts.txt"""
+        path, _ = QFileDialog.getOpenFileName(self, "选择账号文件", "", "Text (*.txt)")
         if not path:
             return
         ips, selected = self._getTargetIPs()
@@ -610,7 +642,23 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _deleteFileOnAll(self) -> None:
-        """批量删除文件"""
+        """批量删除文件：弹窗输入文件名列表"""
+        dlg = MessageBox("批量删除文件", "输入要删除的文件名（每行一个）", self.window())
+        edit = PlainTextEdit(dlg)
+        edit.setPlaceholderText("accounts.txt\nkey.txt\n...")
+        edit.setMinimumHeight(120)
+        dlg.textLayout.addWidget(edit)
+        dlg.yesButton.setText("确认删除")
+        dlg.cancelButton.setText("取消")
+        if not dlg.exec():
+            return
+        filenames = [line.strip() for line in edit.toPlainText().splitlines() if line.strip()]
+        if not filenames:
+            InfoBar.warning(
+                "提示", "未输入文件名",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
         ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
@@ -619,10 +667,9 @@ class BigScreenInterface(ScrollArea):
             )
             return
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
-        if not self._confirmDangerous("批量删除文件", f"即将删除 {scope} 上的文件"):
-            return
-        self._tcp.broadcast(ips, TcpCommand.DELETE_FILE)
-        self._nm.add_history("批量删除文件", scope)
+        payload = "|".join(filenames)
+        self._tcp.broadcast(ips, TcpCommand.DELETE_FILE, payload)
+        self._nm.add_history("批量删除文件", scope, detail=", ".join(filenames))
         InfoBar.success(
             "已发送", f"删除指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
@@ -793,6 +840,15 @@ class BigScreenInterface(ScrollArea):
                     )
                 )
 
+            menu.addSeparator()
+            menu.addAction(
+                Action(
+                    FIF.TAG,
+                    "设置分组",
+                    triggered=lambda: self._setNodeGroup(ip, machine_name),
+                )
+            )
+
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
 
     def _copyText(self, text: str) -> None:
@@ -803,6 +859,25 @@ class BigScreenInterface(ScrollArea):
         InfoBar.success(
             "已复制", text,
             parent=self, position=InfoBarPosition.TOP, duration=1500,
+        )
+
+    def _setNodeGroup(self, ip: str, machine_name: str) -> None:
+        """设置节点分组"""
+        dlg = MessageBox("设置分组", f"为 {machine_name} 设置分组名称", self.window())
+        edit = PlainTextEdit(dlg)
+        edit.setPlaceholderText("输入分组名...")
+        edit.setMaximumHeight(40)
+        dlg.textLayout.addWidget(edit)
+        dlg.yesButton.setText("确认")
+        if not dlg.exec():
+            return
+        group = edit.toPlainText().strip()
+        if not group:
+            return
+        self._tcp.send(ip, TcpCommand.EXT_SET_GROUP, group)
+        InfoBar.success(
+            "已设置", f"{machine_name} → 分组 '{group}'",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
     def _singleNodeCmd(self, ip: str, cmd: TcpCommand, label: str) -> None:
@@ -861,22 +936,25 @@ class BigScreenInterface(ScrollArea):
             self._watchdogTimer.stop()
 
     def _checkStaleNodes(self) -> None:
-        """检查停滞节点并自动重启"""
+        """检查停滞节点并自动软重启脚本"""
         threshold_min = self.spinTimeout.value()
         now = datetime.now()
-        rebooted = 0
+        restarted = 0
         for node in self._nm.nodes.values():
             if node.status in ("离线", "断连"):
                 continue
+            if not node.game_state:  # 未启动脚本的节点跳过
+                continue
             elapsed = (now - node.last_status_update).total_seconds() / 60
             if elapsed >= threshold_min:
-                self._tcp.send(node.ip, TcpCommand.REBOOT_PC)
-                rebooted += 1
-        if rebooted:
-            self._nm.add_history("超时自动重启", f"{rebooted} 个节点")
+                self._tcp.send(node.ip, TcpCommand.STOP_EXE)
+                self._tcp.send(node.ip, TcpCommand.START_EXE)
+                restarted += 1
+        if restarted:
+            self._nm.add_history("超时自动重启脚本", f"{restarted} 个节点")
             InfoBar.warning(
                 "超时监控",
-                f"已自动重启 {rebooted} 个停滞节点",
+                f"已自动重启 {restarted} 个停滞节点的脚本",
                 parent=self,
                 position=InfoBarPosition.TOP,
                 duration=5000,
