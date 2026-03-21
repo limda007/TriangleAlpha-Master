@@ -107,3 +107,60 @@ class TestStderrCapture:
         finally:
             # 兜底恢复，防止断言失败时污染后续测试
             reporter._restore_streams()
+
+
+class TestQueueCapacity:
+    """队列容量应为 5000。"""
+
+    def test_queue_maxsize_is_5000(self):
+        from slave.log_reporter import LogReporter
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        assert reporter._queue.maxsize == 5000
+
+
+class TestDropWarning:
+    """丢弃告警应被注入队列发送给 master。"""
+
+    def test_drop_warning_injected_when_drops_exist(self):
+        """当有丢弃时，_check_and_warn_drops 应将告警消息注入队列。"""
+        from slave.log_reporter import LogReporter
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            # 模拟 _TeeWriter 上有丢弃
+            stdout_tee = sys.stdout
+            assert isinstance(stdout_tee, _TeeWriter)
+            stdout_tee._drop_count = 42
+
+            # 调用 _check_and_warn_drops 应注入告警
+            reporter._check_and_warn_drops()
+            assert stdout_tee.drop_count == 0  # 已重置
+
+            # 队列中应有告警消息
+            found_warning = False
+            while not reporter._queue.empty():
+                msg = reporter._queue.get_nowait()
+                if "丢弃" in msg and "42" in msg:
+                    found_warning = True
+                    break
+            assert found_warning, "应有包含丢弃数量的告警消息"
+        finally:
+            reporter._restore_streams()
+
+    def test_drop_warning_has_local_fallback(self, caplog):
+        """丢弃告警应同时写入本地 logging（防止告警本身被队列丢弃）。"""
+        import logging
+
+        from slave.log_reporter import LogReporter
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            stdout_tee = sys.stdout
+            assert isinstance(stdout_tee, _TeeWriter)
+            stdout_tee._drop_count = 10
+
+            with caplog.at_level(logging.WARNING):
+                reporter._check_and_warn_drops()
+            assert any("丢弃" in r.message and "10" in r.message for r in caplog.records)
+        finally:
+            reporter._restore_streams()

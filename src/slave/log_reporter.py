@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import logging
 import queue as thread_queue
 import sys
 import threading
@@ -23,7 +24,7 @@ class LogReporter:
         self._machine_name = machine_name
         self._port = port
         # C2: 使用线程安全的 queue.Queue 替代 asyncio.Queue
-        self._queue: thread_queue.Queue[str] = thread_queue.Queue(maxsize=1000)
+        self._queue: thread_queue.Queue[str] = thread_queue.Queue(maxsize=5000)
         self._running = False
         self._original_stdout: IO[str] | None = None
         self._original_stderr: IO[str] | None = None
@@ -69,6 +70,7 @@ class LogReporter:
 
             # 发送
             await self._send_lines(lines)
+            self._check_and_warn_drops()
 
     async def _ensure_connection(self) -> asyncio.StreamWriter | None:
         """P1: 获取或建立持久 TCP 连接"""
@@ -109,6 +111,22 @@ class LogReporter:
                 if attempt < 2:
                     await asyncio.sleep(2 ** (attempt + 1))
         # M5: 重试耗尽，丢弃日志
+
+    def _check_and_warn_drops(self) -> None:
+        """检查 stdout/stderr tee writer 的丢弃计数，有丢弃时注入告警。"""
+        total_drops = 0
+        for stream in (sys.stdout, sys.stderr):
+            if isinstance(stream, _TeeWriter):
+                total_drops += stream.reset_drop_count()
+        if total_drops > 0:
+            ts = datetime.now().strftime("%H:%M:%S")
+            warn_msg = f"LOG|{self._machine_name}|{ts}|WARN|[日志丢弃] 队列溢出，丢弃 {total_drops} 条日志"
+            # 本地 logging 兜底（即使队列也满了，至少本地可见）
+            logging.getLogger("trianglealpha.log_reporter").warning(
+                "[日志丢弃] 队列溢出，丢弃 %d 条日志", total_drops,
+            )
+            with contextlib.suppress(thread_queue.Full):
+                self._queue.put_nowait(warn_msg)
 
     def _restore_streams(self) -> None:
         """恢复原始 stdout/stderr。"""
