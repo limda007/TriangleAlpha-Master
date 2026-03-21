@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -12,10 +13,11 @@ from pathlib import Path
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from common.protocol import HEARTBEAT_INTERVAL, GameState
+from common.protocol import HEARTBEAT_INTERVAL, IPC_TIMEOUT, GameState
 from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
 from slave.command_handler import CommandHandler
 from slave.heartbeat import HeartbeatService
+from slave.ipc_receiver import LocalIpcReceiver
 from slave.log_reporter import LogReporter
 from slave.logging_utils import configure_slave_logging, get_logger
 from slave.state_store import RuntimeStatus, SlaveStateStore
@@ -44,6 +46,8 @@ class SlaveBackend(QThread):
         self._state_store = SlaveStateStore(base_dir)
         self._script_running = False
         self._script_started_at: float | None = None
+        self._ipc = LocalIpcReceiver()
+        self._last_ipc_jin_bi: str = "0"  # IPC 金币高水位缓存，防止回退时暴降
 
     def run(self) -> None:
         """QThread 入口。"""
@@ -102,6 +106,8 @@ class SlaveBackend(QThread):
             asyncio.create_task(self._status_writer(self._base_dir, self._heartbeat, start_time)),
             asyncio.create_task(self._process_monitor()),
             asyncio.create_task(self._status_reporter()),
+            asyncio.create_task(self._account_sync()),
+            asyncio.create_task(self._ipc.run()),
         ]
 
         try:
@@ -171,10 +177,12 @@ class SlaveBackend(QThread):
 
     @staticmethod
     def _is_testdemo_running() -> bool:
+        """检测脚本进程是否存活（Launcher 或 TestDemo 任一即可）"""
+        targets = ("testdemo", "trianglealpha.launcher")
         for proc in psutil.process_iter(["name"], ad_value=""):
             try:
                 name = proc.info.get("name", "")
-                if name and name.lower().startswith("testdemo"):
+                if name and name.lower().removesuffix(".exe") in targets:
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -201,7 +209,38 @@ class SlaveBackend(QThread):
         default_elapsed = "0"
         if self._script_started_at is not None:
             default_elapsed = str(max(0, int(time.time() - self._script_started_at)))
+
+        # ── IPC 优先：从 TestDemo 本地 UDP 推送获取实时数据 ──
+        ipc_data, ipc_age = self._ipc.snapshot()
+        if ipc_data is not None and ipc_age < IPC_TIMEOUT:
+            # 缓存最新 IPC 数据，供 IPC 超时时沿用
+            self._last_ipc_jin_bi = ipc_data.get("jinbi", "0")
+            level_raw = ipc_data.get("level", "0")
+            return RuntimeStatus(
+                state=self._map_ipc_status(ipc_data.get("status_text", "")),
+                level=int(level_raw) if level_raw.isdigit() else 0,
+                jin_bi=self._last_ipc_jin_bi,
+                current_account=ipc_data.get("account", ""),
+                elapsed=ipc_data.get("elapsed", default_elapsed),
+            )
+
+        # ── IPC 刚超时但有缓存：沿用最后 IPC 数据，避免文件回退导致金币跳变 ──
+        if ipc_data is not None and self._last_ipc_jin_bi != "0":
+            level_raw = ipc_data.get("level", "0")
+            return RuntimeStatus(
+                state=self._map_ipc_status(ipc_data.get("status_text", "")),
+                level=int(level_raw) if level_raw.isdigit() else 0,
+                jin_bi=self._last_ipc_jin_bi,
+                current_account=ipc_data.get("account", ""),
+                elapsed=ipc_data.get("elapsed", default_elapsed),
+            )
+
+        # ── 文件兜底：读 runtime_status.json ──
         snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
+        if not snapshot.current_account:
+            active = self._state_store.load_active_account(default_elapsed=default_elapsed)
+            if active is not None:
+                snapshot = active
         if snapshot.state == GameState.SCRIPT_STOPPED:
             return RuntimeStatus(
                 state=GameState.RUNNING,
@@ -211,6 +250,17 @@ class SlaveBackend(QThread):
                 elapsed=snapshot.elapsed,
             )
         return snapshot
+
+    @staticmethod
+    def _map_ipc_status(text: str) -> str:
+        """将 TestDemo IPC 上报的状态文字映射为 GameState 值。"""
+        if not text:
+            return GameState.RUNNING
+        if "完成" in text:
+            return GameState.COMPLETED
+        if "停" in text or "退出" in text:
+            return GameState.SCRIPT_STOPPED
+        return GameState.RUNNING
 
     async def _status_writer(self, base_dir: Path, heartbeat: HeartbeatService, start_time: float) -> None:
         """定期写入 slave_status.json。"""
@@ -237,6 +287,21 @@ class SlaveBackend(QThread):
                     json.dumps(status, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
+            await asyncio.sleep(30)
+
+    async def _account_sync(self) -> None:
+        """每 30s 将 accounts.json 全量同步给 master。"""
+        await asyncio.sleep(5)  # 启动延迟，等待心跳连接就绪
+        while self._running:
+            try:
+                accounts = self._state_store.load_all_game_accounts()
+                if accounts:
+                    payload = json.dumps(accounts, ensure_ascii=False, separators=(",", ":"))
+                    payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
+                    self._heartbeat.send_account_sync(payload_b64)
+                    logger.debug("账号同步已发送: %d 条", len(accounts))
+            except Exception:
+                logger.exception("账号同步失败")
             await asyncio.sleep(30)
 
     def stop(self) -> None:
