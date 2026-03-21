@@ -1,5 +1,65 @@
-# -*- mode: python ; coding: utf-8 -*-
+# ruff: noqa: F821
 """TriangleAlpha Master — onefile 单文件"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT_DIR = Path(SPECPATH).resolve()
+RESOURCE_DIR = ROOT_DIR / 'src' / 'master' / 'app' / 'resource'
+
+
+def _build_macos_icon() -> str | None:
+    """基于现有 PNG 生成 macOS app bundle 所需的 .icns。"""
+    if sys.platform != 'darwin':
+        return None
+
+    source_png = RESOURCE_DIR / 'icon_512.png'
+    if not source_png.exists():
+        return None
+
+    output_dir = ROOT_DIR / 'build' / 'macos'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    icon_path = output_dir / 'icon.icns'
+    iconutil = '/usr/bin/iconutil'
+    sips = '/usr/bin/sips'
+
+    with tempfile.TemporaryDirectory(prefix='trianglealpha-iconset-') as tmp_dir:
+        iconset_dir = Path(tmp_dir) / 'TriangleAlpha.iconset'
+        iconset_dir.mkdir()
+
+        for size in (16, 32, 128, 256, 512):
+            out_path = iconset_dir / f'icon_{size}x{size}.png'
+            subprocess.run(
+                [sips, '-z', str(size), str(size), str(source_png), '--out', str(out_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            retina_size = size * 2
+            retina_path = iconset_dir / f'icon_{size}x{size}@2x.png'
+            subprocess.run(
+                [sips, '-z', str(retina_size), str(retina_size), str(source_png), '--out', str(retina_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        subprocess.run(
+            [iconutil, '-c', 'icns', str(iconset_dir), '-o', str(icon_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    return str(icon_path)
+
+
+macos_icon = _build_macos_icon()
+exe_icon = 'src/master/app/resource/icon.ico' if sys.platform == 'win32' else None
 
 a = Analysis(
     ['src/master/main.py'],
@@ -36,10 +96,38 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(
-    pyz, a.scripts, a.binaries, a.datas, [],
-    name='TriangleAlpha-Master',
-    debug=False, strip=False, upx=False,
-    console=False,
-    icon='src/master/app/resource/icon.ico',
-)
+if sys.platform == 'darwin':
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='TriangleAlpha-Master',
+        debug=False,
+        strip=False,
+        upx=False,
+        console=False,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='TriangleAlpha-Master',
+    )
+    app = BUNDLE(
+        coll,
+        name='TriangleAlpha-Master.app',
+        icon=macos_icon,
+        bundle_identifier='com.trianglealpha.master',
+    )
+else:
+    exe = EXE(
+        pyz, a.scripts, a.binaries, a.datas, [],
+        name='TriangleAlpha-Master',
+        debug=False, strip=False, upx=False,
+        console=False,
+        icon=exe_icon,
+    )

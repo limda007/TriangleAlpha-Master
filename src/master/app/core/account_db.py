@@ -34,7 +34,21 @@ CREATE TRIGGER IF NOT EXISTS trg_updated AFTER UPDATE ON accounts
 BEGIN
     UPDATE accounts SET updated_at = datetime('now','localtime') WHERE id = NEW.id;
 END;
+
+CREATE TABLE IF NOT EXISTS config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 """
+
+_LEGACY_STATUS_MAP = {
+    "空闲": "空闲中",
+    "使用中": "运行中",
+    "运行": "运行中",
+    "完成": "已完成",
+    "取号": "已取号",
+}
+_EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'")
 
 
 class AccountDB(QObject):
@@ -68,6 +82,24 @@ class AccountDB(QObject):
             self._conn.close()
             self._conn = None  # type: ignore[assignment]
 
+    # ── 配置键值存取 ──
+
+    def get_config(self, key: str, default: str = "") -> str:
+        """读取配置项"""
+        row = self._conn.execute(
+            "SELECT value FROM config WHERE key = ?", (key,),
+        ).fetchone()
+        return row["value"] if row else default
+
+    def set_config(self, key: str, value: str) -> None:
+        """写入配置项（upsert）"""
+        self._conn.execute(
+            "INSERT INTO config (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self._conn.commit()
+
     # ── 导入 ───────────────────────────────────────────────
 
     def import_fresh(self, text: str) -> None:
@@ -78,22 +110,29 @@ class AccountDB(QObject):
         self._refresh_counts()
         self.pool_changed.emit()
 
-    def load_from_text(self, text: str) -> None:
-        """合并导入 INSERT OR IGNORE（增量添加）"""
-        self._insert_lines(text)
+    def load_from_text(self, text: str) -> tuple[int, int]:
+        """合并导入 INSERT OR IGNORE（增量添加）
+
+        Returns:
+            (inserted, skipped) 元组
+        """
+        inserted, skipped = self._insert_lines(text)
         self._conn.commit()
         self._refresh_counts()
         self.pool_changed.emit()
+        return inserted, skipped
 
-    def load_from_file(self, path: str | Path) -> None:
+    def load_from_file(self, path: str | Path) -> tuple[int, int]:
         """读文件 → load_from_text"""
         try:
             text = Path(path).read_text(encoding="utf-8")
         except OSError as e:
             raise OSError(f"无法读取账号文件: {e}") from e
-        self.load_from_text(text)
+        return self.load_from_text(text)
 
-    def _insert_lines(self, text: str) -> None:
+    def _insert_lines(self, text: str) -> tuple[int, int]:
+        inserted = 0
+        skipped = 0
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -101,13 +140,18 @@ class AccountDB(QObject):
             acc = AccountInfo.from_line(line)
             if not acc.username:
                 continue
-            self._conn.execute(
+            cur = self._conn.execute(
                 "INSERT OR IGNORE INTO accounts "
                 "(username, password, bind_email, bind_email_pwd, notes) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (acc.username, acc.password, acc.bind_email,
                  acc.bind_email_password, acc.notes),
             )
+            if cur.rowcount > 0:
+                inserted += 1
+            else:
+                skipped += 1
+        return inserted, skipped
 
     # ── 分配 / 回收 ───────────────────────────────────────
 
@@ -244,12 +288,76 @@ class AccountDB(QObject):
     # ── 内部方法 ───────────────────────────────────────────
 
     def _migrate_legacy_status(self) -> None:
-        """修正旧版数据库中的状态值（如 '空闲' → '空闲中'）"""
-        _LEGACY_MAP = {"空闲": "空闲中", "运行": "运行中", "完成": "已完成", "取号": "已取号"}
-        for old, new in _LEGACY_MAP.items():
+        """修正旧版数据库中的状态值和 CHECK 约束。"""
+        if self._schema_requires_rebuild():
+            self._rebuild_table_with_new_constraint()
+            return
+        for old, new in _LEGACY_STATUS_MAP.items():
             self._conn.execute(
                 "UPDATE accounts SET status=? WHERE status=?", (new, old),
             )
+        self._conn.commit()
+
+    def _schema_requires_rebuild(self) -> bool:
+        """检测 accounts 表约束是否仍停留在旧版状态集合。"""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'",
+        ).fetchone()
+        if row is None or not row[0]:
+            return False
+        schema_sql = str(row[0])
+        if not all(token in schema_sql for token in _EXPECTED_STATUS_TOKENS):
+            return True
+        return any(f"'{legacy}'" in schema_sql for legacy in _LEGACY_STATUS_MAP)
+
+    def _rebuild_table_with_new_constraint(self) -> None:
+        """重建表以更新 CHECK 约束（SQLite 不支持 ALTER CHECK）。"""
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS accounts_new (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                username         TEXT    NOT NULL UNIQUE,
+                password         TEXT    NOT NULL DEFAULT '',
+                bind_email       TEXT    NOT NULL DEFAULT '',
+                bind_email_pwd   TEXT    NOT NULL DEFAULT '',
+                notes            TEXT    NOT NULL DEFAULT '',
+                status           TEXT    NOT NULL DEFAULT '空闲中'
+                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号')),
+                assigned_machine TEXT    NOT NULL DEFAULT '',
+                level            INTEGER NOT NULL DEFAULT 0,
+                jin_bi           TEXT    NOT NULL DEFAULT '0',
+                completed_at     TEXT    DEFAULT NULL,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+        """)
+        # 迁移数据，同时映射旧状态值
+        case_expr = "CASE status "
+        for old, new in _LEGACY_STATUS_MAP.items():
+            case_expr += f"WHEN '{old}' THEN '{new}' "
+        case_expr += "ELSE status END"
+        self._conn.execute(f"""
+            INSERT OR IGNORE INTO accounts_new
+                (username, password, bind_email, bind_email_pwd, notes,
+                 status, assigned_machine, level, jin_bi,
+                 completed_at, created_at, updated_at)
+            SELECT username, password, bind_email, bind_email_pwd, notes,
+                   {case_expr}, assigned_machine, level, jin_bi,
+                   completed_at, created_at, updated_at
+            FROM accounts
+        """)
+        self._conn.execute("DROP TABLE accounts")
+        self._conn.execute("ALTER TABLE accounts_new RENAME TO accounts")
+        # 重建索引和触发器
+        self._conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
+            CREATE INDEX IF NOT EXISTS idx_machine
+                ON accounts(assigned_machine) WHERE assigned_machine != '';
+            CREATE TRIGGER IF NOT EXISTS trg_updated AFTER UPDATE ON accounts
+            BEGIN
+                UPDATE accounts SET updated_at = datetime('now','localtime')
+                    WHERE id = NEW.id;
+            END;
+        """)
         self._conn.commit()
 
     def _refresh_counts(self) -> None:

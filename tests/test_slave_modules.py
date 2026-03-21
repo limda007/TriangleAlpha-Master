@@ -2,6 +2,7 @@
 
 import asyncio
 import platform
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from common.protocol import UdpMessageType, build_udp_ext_online, parse_udp_message
@@ -39,6 +40,13 @@ class TestHeartbeatService:
         svc._running = True
         svc.stop()
         assert svc._running is False
+
+    def test_missing_teammate_fill_defaults_to_disabled(self, tmp_path: Path):
+        svc = HeartbeatService(base_dir=tmp_path)
+        assert svc._read_teammate_fill() == "0"
+        # 文件不存在时自动创建默认值
+        assert (tmp_path / "补齐队友配置.txt").exists()
+        assert (tmp_path / "补齐队友配置.txt").read_text(encoding="utf-8") == "0"
 
 
 class TestProcessManager:

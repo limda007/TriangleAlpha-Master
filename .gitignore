@@ -4,7 +4,13 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.DS_Store
+.omc/
 dist/
 build/
 *.egg-info/
 .venv/
+accounts.db
+finished_accounts.txt
+src/slave/slave_status.json
+src/slave/runtime_status.json

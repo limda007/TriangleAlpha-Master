@@ -177,7 +177,6 @@ class LogInterface(ScrollArea):
         return not (level_filter != "全部级别" and level != level_filter)
 
     def _refreshDisplay(self) -> None:
-        self.logOutput.clear()
         selected_names = {
             self.nodeList.item(i).text()
             for i in range(self.nodeList.count())
@@ -186,6 +185,7 @@ class LogInterface(ScrollArea):
         level_filter = self.levelCombo.currentText()
         search = self.searchBox.text().lower()
 
+        filtered_lines: list[str] = []
         for name in sorted(selected_names):
             for line in self._logs.get(name, []):
                 # 提取级别
@@ -198,7 +198,11 @@ class LogInterface(ScrollArea):
                     continue
                 if search and search not in line.lower():
                     continue
-                self.logOutput.appendPlainText(f"[{name}] {line}")
+                filtered_lines.append(f"[{name}] {line}")
+
+        self.logOutput.setUpdatesEnabled(False)
+        self.logOutput.setPlainText("\n".join(filtered_lines))
+        self.logOutput.setUpdatesEnabled(True)
 
     def _toggleAutoScroll(self, checked: bool) -> None:
         self._auto_scroll = checked

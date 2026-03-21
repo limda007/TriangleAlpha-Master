@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import platform
 import time
-from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
@@ -18,6 +17,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from slave.runtime_paths import RESOURCE_DIR
 
 _MAX_LOG_LINES = 200
 
@@ -129,7 +130,9 @@ class SlaveWindow(QWidget):
     def _init_tray(self) -> None:
         self._tray = QSystemTrayIcon(self)
 
-        icon_path = self._base_dir / "icon.png"
+        icon_path = RESOURCE_DIR / "icon.png"
+        if not icon_path.exists():
+            icon_path = self._base_dir / "icon.png"
         if icon_path.exists():
             icon = QIcon(str(icon_path))
         else:
@@ -161,9 +164,7 @@ class SlaveWindow(QWidget):
         self._lbl_resources.setText(f"CPU: {cpu:.0f}% | MEM: {mem:.0f}%")
 
     def on_command(self, desc: str) -> None:
-        """指令信号 — 写日志 + 气泡"""
-        ts = datetime.now().strftime("%H:%M")
-        self.append_log(f"{ts} [指令] {desc}")
+        """指令信号 — 保留托盘提示，日志由统一 logger 输出。"""
         if self._tray.isVisible():
             self._tray.showMessage("指令", desc, QSystemTrayIcon.MessageIcon.Information, 3000)
 

@@ -279,7 +279,8 @@ class TestProtocolCompatibility:
         dispatch_source = inspect.getsource(CommandHandler._dispatch)
 
         for cmd in TcpCommand:
-            assert cmd.value in dispatch_source, f"TcpCommand.{cmd.name} ({cmd.value}) 在 _dispatch 中无对应 handler"
+            found = cmd.value in dispatch_source or cmd.name in dispatch_source
+            assert found, f"TcpCommand.{cmd.name} ({cmd.value}) 在 _dispatch 中无对应 handler"
 
     def test_build_and_parse_roundtrip(self):
         """构建 TCP 命令 → 解码验证"""

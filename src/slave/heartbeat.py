@@ -6,12 +6,15 @@ import os
 import platform
 import socket
 from collections.abc import Callable
+from pathlib import Path
 
 import psutil
 
 from common.protocol import HEARTBEAT_INTERVAL, UDP_PORT, build_udp_ext_online, build_udp_offline, build_udp_status
+from slave.logging_utils import get_logger
 
 SLAVE_VERSION = "2.0.0"
+logger = get_logger(__name__)
 
 
 class HeartbeatService:
@@ -21,6 +24,7 @@ class HeartbeatService:
         port: int = UDP_PORT,
         interval: int = HEARTBEAT_INTERVAL,
         on_sent: Callable[[int, float, float], None] | None = None,
+        base_dir: Path | None = None,
     ):
         self._master_ip = master_ip
         self._port = port
@@ -31,12 +35,17 @@ class HeartbeatService:
         self._running = False
         self._on_sent = on_sent
         self._beat_count = 0
+        self._base_dir = base_dir
         # P0: 预热 CPU 采样基准值，避免首次 interval=0 返回 0.0
         psutil.cpu_percent()
 
     @property
     def machine_name(self) -> str:
         return self._machine_name
+
+    @property
+    def group(self) -> str:
+        return self._group
 
     def set_group(self, group: str) -> None:
         self._group = group
@@ -67,6 +76,10 @@ class HeartbeatService:
                     try:
                         cpu = psutil.cpu_percent(interval=0)
                         mem = psutil.virtual_memory().percent
+                        teammate_fill = self._read_teammate_fill()
+                        weapon_config = self._read_config("武器配置.txt")
+                        level_threshold = self._read_config("下号等级.txt")
+                        loot_count = self._read_config("舔包次数.txt")
                         msg = build_udp_ext_online(
                             self._machine_name,
                             self._user_name,
@@ -74,6 +87,10 @@ class HeartbeatService:
                             mem,
                             SLAVE_VERSION,
                             self._group,
+                            teammate_fill,
+                            weapon_config,
+                            level_threshold,
+                            loot_count,
                         )
                         data = msg.encode("utf-8")
                         target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
@@ -84,9 +101,9 @@ class HeartbeatService:
                         consecutive_errors = 0
                     except Exception as e:
                         consecutive_errors += 1
-                        print(f"[心跳] 发送失败 (连续第 {consecutive_errors} 次): {e}")
+                        logger.warning("心跳发送失败 (连续第 %s 次): %s", consecutive_errors, e)
                         if consecutive_errors >= 10:
-                            print("[心跳] 连续失败过多，等待 30 秒后重试")
+                            logger.warning("心跳连续失败过多，等待 30 秒后重试")
                             await asyncio.sleep(30)
                             consecutive_errors = 0
                     await asyncio.sleep(self._interval)
@@ -102,3 +119,32 @@ class HeartbeatService:
 
     def stop(self) -> None:
         self._running = False
+
+    # 配置文件默认值：文件不存在或为空时自动创建
+    _CONFIG_DEFAULTS = {
+        "补齐队友配置.txt": "0",
+        "武器配置.txt": "G17_不带药",
+        "下号等级.txt": "18",
+        "舔包次数.txt": "8",
+    }
+
+    def _read_teammate_fill(self) -> str:
+        """读取补齐队友配置，缺省时按关闭处理。"""
+        return self._read_config("补齐队友配置.txt")
+
+    def _read_config(self, filename: str) -> str:
+        """读取指定配置文件内容，不存在或为空时自动创建默认值。"""
+        default = self._CONFIG_DEFAULTS.get(filename, "")
+        if not self._base_dir:
+            return default
+        cfg = self._base_dir / filename
+        try:
+            if cfg.exists():
+                val = cfg.read_text(encoding="utf-8-sig").strip()
+                if val:
+                    return val
+            # 文件不存在或为空 → 写入默认值
+            cfg.write_text(default, encoding="utf-8")
+            return default
+        except OSError:
+            return default

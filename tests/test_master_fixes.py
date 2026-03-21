@@ -1,13 +1,11 @@
 """Master 核心组件联调测试 — 验证所有修复项"""
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from common.models import AccountStatus
 from common.protocol import TcpCommand
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager

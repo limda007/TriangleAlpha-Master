@@ -27,6 +27,10 @@ class NodeInfo:
     cpu_percent: float = 0.0
     mem_percent: float = 0.0
     slave_version: str = ""
+    teammate_fill: str = ""
+    weapon_config: str = ""
+    level_threshold: str = ""
+    loot_count: str = ""
     last_seen: datetime = field(default_factory=datetime.now)
     last_status_update: datetime = field(default_factory=datetime.now)
     game_state: str = ""  # TestDemo 上报的游戏状态（运行中/已完成/脚本已停止）

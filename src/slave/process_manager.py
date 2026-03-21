@@ -7,6 +7,8 @@ from pathlib import Path
 
 import psutil
 
+from slave.logging_utils import get_logger
+
 _KILL_TARGETS = [
     "TriangleAlpha.Launcher",
     "TestDemo",
@@ -29,6 +31,7 @@ _KILL_KEYWORDS = [
     "rapidocr",
     "dmsoft",  # 大漠插件相关进程
 ]
+logger = get_logger(__name__)
 
 
 class ProcessManager:
@@ -42,10 +45,10 @@ class ProcessManager:
         await asyncio.sleep(1)
         exe = self._base_dir / "TriangleAlpha.Launcher.exe"
         if not exe.exists():
-            print(f"[错误] TriangleAlpha.Launcher.exe 不存在: {exe}")
+            logger.error("TriangleAlpha.Launcher.exe 不存在: %s", exe)
             return False
         self._process = await asyncio.create_subprocess_exec(str(exe), cwd=str(self._base_dir))
-        print("[启动] TriangleAlpha.Launcher.exe")
+        logger.info("启动 TriangleAlpha.Launcher.exe")
         return True
 
     async def stop_all(self) -> int:
@@ -84,7 +87,7 @@ class ProcessManager:
                     total += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        print(f"[清理] 已停止 {total} 个进程")
+        logger.info("已停止 %s 个进程", total)
         return total
 
     async def kill_by_name(self, name: str) -> int:

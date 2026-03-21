@@ -8,20 +8,24 @@ import tempfile
 from pathlib import Path
 
 import psutil
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from slave.backend import SlaveBackend
+from slave.logging_utils import configure_slave_logging, get_logger
+from slave.runtime_paths import RESOURCE_DIR, get_base_dir
 from slave.slave_window import SlaveWindow
+
+logger = get_logger(__name__)
 
 
 def _get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    # 源码模式: 优先使用 CWD（运维通常 cd 到部署目录再启动）
-    cwd = Path.cwd()
-    if (cwd / "TestDemo.exe").exists() or (cwd / "主控IP.txt").exists() or (cwd / "master.txt").exists():
-        return cwd
-    return Path(__file__).parent
+    """兼容旧测试与旧调用点。"""
+    return get_base_dir()
+
+
+def _is_real_qt_app(app: object) -> bool:
+    return app.__class__.__module__.startswith("PyQt6.")
 
 
 class InstanceLock:
@@ -77,14 +81,18 @@ def _read_master_ip(base_dir: Path) -> str | None:
         if p.exists():
             ip = p.read_text(encoding="utf-8").strip()
             if ip:
-                print(f"[配置] 主控IP: {ip} (来自 {name})")
+                logger.info("主控IP: %s (来自 %s)", ip, name)
                 return ip
     return None
 
 
 def main() -> None:
+    configure_slave_logging()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 托盘模式
+    icon_path = RESOURCE_DIR / "icon.png"
+    if icon_path.exists() and _is_real_qt_app(app):
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     base_dir = _get_base_dir()
 
@@ -117,7 +125,7 @@ def main() -> None:
     finally:
         backend.stop()
         if not backend.wait(5000):
-            print("[警告] SlaveBackend 未在 5 秒内停止")
+            logger.warning("SlaveBackend 未在 5 秒内停止")
         instance_lock.release()
     sys.exit(exit_code)
 

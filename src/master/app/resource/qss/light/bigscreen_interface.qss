@@ -1,13 +1,26 @@
 /* 大屏模式 — 浅色主题 */
-/* 仅去 ScrollArea 边框，不设 transparent — 让 Fluent 主题提供不透明背景 */
 #bigscreenInterface { border: none; }
+
+/* ═══ 分割条 ═══ */
+QSplitter::handle:vertical {
+    height: 8px;
+    background: qlineargradient(x1:0, y1:0.5, x2:1, y2:0.5,
+        stop:0 transparent, stop:0.05 transparent,
+        stop:0.10 rgba(0, 0, 0, 0.06),
+        stop:0.50 rgba(0, 0, 0, 0.12),
+        stop:0.90 rgba(0, 0, 0, 0.06),
+        stop:0.95 transparent, stop:1 transparent);
+    border: none;
+    margin: 0 16px;
+    image: none;
+}
 
 /* ═══ 标题栏 ═══ */
 #headerBar {
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #f0f4ff, stop:1 #e8f0fe);
     border: 1px solid #d0d9e8;
-    border-radius: 8px;
+    border-radius: 10px;
 }
 #headerTitle {
     color: #1e3a5f;
@@ -20,8 +33,12 @@
 #badgeOnline, #badgeAccount, #badgeUptime {
     background-color: rgba(255, 255, 255, 0.85);
     border: 1px solid #c7d2e0;
-    border-radius: 12px;
+    border-radius: 8px;
+    padding: 2px 4px;
 }
+#badgeOnline { border-color: #22c55e; }
+#badgeAccount { border-color: #3b82f6; }
+#badgeUptime { border-color: #a78bfa; }
 #badgeText {
     color: #475569;
     font-size: 12px;
@@ -32,24 +49,12 @@
 #accountPanel {
     background-color: #ffffff;
     border: 1px solid #dde3ed;
-    border-radius: 8px;
+    border-radius: 10px;
 }
 #panelTitle {
     color: #334155;
     font-size: 14px;
     font-weight: bold;
-}
-#accountEdit {
-    background-color: #f8fafc;
-    border: 1px solid #dde3ed;
-    border-radius: 6px;
-    color: #334155;
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
-    font-size: 12px;
-    padding: 6px;
-}
-#accountEdit:focus {
-    border-color: #93b4f5;
 }
 #poolStats {
     color: #64748b;
@@ -61,16 +66,16 @@
 #actionPanel {
     background-color: #ffffff;
     border: 1px solid #dde3ed;
-    border-radius: 8px;
+    border-radius: 10px;
 }
 #actionPanel PushButton {
     background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #f5f7fb, stop:1 #ebeef5);
+        stop:0 #f8fafc, stop:1 #eef1f6);
     color: #334155;
-    border: 1px solid #c7d2e0;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-weight: bold;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: 600;
     font-size: 13px;
 }
 #actionPanel PushButton:hover {
@@ -86,7 +91,7 @@
 
 /* ═══ 统计卡片（复用） ═══ */
 #statCard {
-    border-radius: 8px;
+    border-radius: 10px;
     background-color: rgba(249, 249, 249, 0.95);
     border: 1px solid rgb(234, 234, 234);
 }

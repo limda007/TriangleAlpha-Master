@@ -16,21 +16,30 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     Action,
+    CaptionLabel,
     CheckBox,
+    ComboBox,
+    GroupHeaderCardWidget,
+    HyperlinkLabel,
     InfoBar,
     InfoBarPosition,
+    LineEdit,
     MenuAnimationType,
     MessageBox,
+    Pivot,
     PlainTextEdit,
+    PrimaryPushButton,
     PushButton,
     RoundMenu,
     ScrollArea,
+    SpinBox,
     TableWidget,
 )
 from qfluentwidgets import (
@@ -43,18 +52,10 @@ from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 
-_NODE_HEADERS = ["", "机器名", "IP地址", "挂机账号", "等级", "金币", "运行时间", "运行状态"]
-
-# 操作按钮配置: (文本, FluentIcon, objectName)
-_ACTION_BUTTONS = [
-    ("分发账号", FIF.SEND, "btnDistAccounts"),
-    ("提取合格出货", FIF.COMPLETED, "btnExport"),
-    ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
-    ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
-    ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
-    ("启动/重启脚本", FIF.PLAY_SOLID, "btnStartExe"),
-    ("强制重启电脑", FIF.POWER_BUTTON, "btnRebootPC"),
-    ("停止脚本游戏", FIF.CLOSE, "btnStopExe"),
+_NODE_HEADERS = [
+    "", "机器名", "IP地址", "挂机账号", "等级", "金币",
+    "运行时间", "运行状态", "CPU%", "内存%", "版本",
+    "补齐队友", "武器配置", "下号等级", "舔包次数",
 ]
 
 # 状态色
@@ -64,6 +65,26 @@ _STATUS_COLORS: dict[str, QColor] = {
     "断连": QColor("#6b7280"),
 }
 _STATUS_COLOR_DEFAULT = QColor("#eab308")
+
+# 账号状态色
+_ACCOUNT_STATUS_COLORS: dict[str, QColor] = {
+    "空闲中": QColor("#6b7280"),
+    "运行中": QColor("#3b82f6"),
+    "已完成": QColor("#22c55e"),
+    "已取号": QColor("#8b5cf6"),
+}
+
+_WEAPONS = [
+    "G17", "G17_不带药", "QSZ92G", "左轮357",
+    "AK74", "CAR15", "M16A4突击步枪",
+    "UZI冲锋枪", "勇士冲锋枪", "MP5冲锋枪", "野牛冲锋枪",
+    "M870霰弹枪", "M1014霰弹枪",
+    "Mini14射手步枪", "VSS射手步枪",
+]
+_DEFAULT_TEAMMATE_TEXT = "关闭"
+_DEFAULT_WEAPON = "G17_不带药"
+_DEFAULT_LEVEL = 18
+_DEFAULT_LOOT = 8
 
 
 def _colored_dot_icon(color: QColor, size: int = 16) -> QIcon:
@@ -96,6 +117,7 @@ class BigScreenInterface(ScrollArea):
         self._pool = account_pool
         self._start_time = datetime.now()
         self._row_map: dict[str, int] = {}
+        self._pending_updates: set[str] = set()
 
         # 预渲染状态图标缓存
         self._status_icons: dict[str, QIcon] = {
@@ -117,25 +139,42 @@ class BigScreenInterface(ScrollArea):
         # ═══ 节点实时表格 ═══
         self.table = self._buildNodeTable()
 
+        # 节点分组筛选
+        nodeContainer = QWidget(self.view)
+        nodeLayout = QVBoxLayout(nodeContainer)
+        nodeLayout.setContentsMargins(0, 0, 0, 0)
+        nodeLayout.setSpacing(4)
+        filterRow = QHBoxLayout()
+        filterRow.addStretch()
+        filterLbl = QLabel("分组筛选:", nodeContainer)
+        filterRow.addWidget(filterLbl)
+        self._groupCombo = ComboBox(nodeContainer)
+        self._groupCombo.addItem("全部")
+        self._groupCombo.setFixedWidth(120)
+        self._groupCombo.currentTextChanged.connect(self._onGroupFilterChanged)
+        filterRow.addWidget(self._groupCombo)
+        nodeLayout.addLayout(filterRow)
+        nodeLayout.addWidget(self.table)
+
         # ═══ 底部区域：账号池 + 操作按钮 ═══
         bottom = QHBoxLayout()
         bottom.setSpacing(12)
 
         accountPanel = self._buildAccountPanel()
-        bottom.addWidget(accountPanel, stretch=6)
+        bottom.addWidget(accountPanel, stretch=7)
 
         actionPanel = self._buildActionPanel()
-        bottom.addWidget(actionPanel, stretch=4)
+        bottom.addWidget(actionPanel, stretch=3)
 
         bottomWidget = QWidget(self)
         bottomWidget.setLayout(bottom)
 
         # ═══ 可拖拽分割器：节点表格 ↔ 底部区域 ═══
         splitter = QSplitter(Qt.Orientation.Vertical, self.view)
-        splitter.addWidget(self.table)
+        splitter.addWidget(nodeContainer)
         splitter.addWidget(bottomWidget)
-        splitter.setStretchFactor(0, 6)
-        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(0, 7)
+        splitter.setStretchFactor(1, 3)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
         root.addWidget(splitter)
@@ -159,11 +198,24 @@ class BigScreenInterface(ScrollArea):
         self._nm.node_online.connect(self._scheduleRefreshTable)
         self._nm.node_updated.connect(self._scheduleRefreshTable)
         self._nm.node_offline.connect(self._scheduleRefreshTable)
+        self._nm.node_offline.connect(self._onNodeOffline)
         self._nm.stats_changed.connect(self._refreshHeader)
         self._pool.pool_changed.connect(self._refreshAccountStats)
         self._pool.pool_changed.connect(self._refreshAccountTable)
 
         self._tcp.command_failed.connect(self._onCmdFailed)
+
+        # 节点选中 → 回填配置面板
+        self.table.selectionModel().selectionChanged.connect(
+            self._onNodeSelectionChanged
+        )
+
+        # 离线通知限频
+        self._offline_batch: list[str] = []
+        self._offlineBatchTimer = QTimer(self)
+        self._offlineBatchTimer.setSingleShot(True)
+        self._offlineBatchTimer.setInterval(5000)
+        self._offlineBatchTimer.timeout.connect(self._flushOfflineBatch)
 
         # 运行时长定时器
         self._uptimeTimer = QTimer(self)
@@ -260,7 +312,7 @@ class BigScreenInterface(ScrollArea):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        for col in (4, 5, 6, 7):
+        for col in range(4, len(_NODE_HEADERS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -337,34 +389,262 @@ class BigScreenInterface(ScrollArea):
         return panel
 
     def _buildActionPanel(self) -> QFrame:
-        """底部右侧：7 个操作按钮（带图标）"""
+        """底部右侧：Pivot 分页面板（操作/文件/配置）"""
         panel = QFrame(self)
         panel.setObjectName("actionPanel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
+        outerLayout = QVBoxLayout(panel)
+        outerLayout.setContentsMargins(10, 8, 10, 8)
+        outerLayout.setSpacing(6)
 
+        # Pivot 导航 + QStackedWidget
+        self._actionPivot = Pivot(panel)
+        self._actionStack = QStackedWidget(panel)
+        outerLayout.addWidget(self._actionPivot, 0, Qt.AlignmentFlag.AlignLeft)
+        outerLayout.addWidget(self._actionStack)
+
+        # ── Page 1: 操作 ──
+        opPage = QWidget()
+        opPage.setObjectName("opPage")
+        opLayout = QVBoxLayout(opPage)
+        opLayout.setContentsMargins(0, 6, 0, 0)
+        opLayout.setSpacing(5)
+
+        _OP_BUTTONS = [
+            ("一键分发文件", FIF.PLAY, "btnOneClick"),
+            ("启动/重启脚本", FIF.PLAY_SOLID, "btnStartExe"),
+            ("停止脚本游戏", FIF.CLOSE, "btnStopExe"),
+            ("强制重启电脑", FIF.POWER_BUTTON, "btnRebootPC"),
+        ]
         self._actionBtns: list[PushButton] = []
-        for text, icon, obj_name in _ACTION_BUTTONS:
-            btn = PushButton(icon, text, panel)
+        for text, icon, obj_name in _OP_BUTTONS:
+            btn = PushButton(icon, text, opPage)
             btn.setObjectName(obj_name)
             btn.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
             )
-            layout.addWidget(btn)
+            opLayout.addWidget(btn)
             self._actionBtns.append(btn)
 
-        # 连接按钮信号
-        self._actionBtns[0].clicked.connect(self._distributeAccounts)
-        self._actionBtns[1].clicked.connect(self._exportQualified)
-        self._actionBtns[2].clicked.connect(self._sendFileToAll)
-        self._actionBtns[3].clicked.connect(self._deleteFileOnAll)
-        self._actionBtns[4].clicked.connect(self._distributeKey)
-        self._actionBtns[5].clicked.connect(self._startExeOnAll)
-        self._actionBtns[6].clicked.connect(self._rebootAllPC)
-        self._actionBtns[7].clicked.connect(self._stopExeOnAll)
+        # ── Page 2: 文件 ──
+        filePage = QWidget()
+        filePage.setObjectName("filePage")
+        fileLayout = QVBoxLayout(filePage)
+        fileLayout.setContentsMargins(0, 6, 0, 0)
+        fileLayout.setSpacing(5)
+
+        _FILE_BUTTONS = [
+            ("提取合格出货", FIF.COMPLETED, "btnExport"),
+            ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
+            ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
+            ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
+        ]
+        for text, icon, obj_name in _FILE_BUTTONS:
+            btn = PushButton(icon, text, filePage)
+            btn.setObjectName(obj_name)
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
+            )
+            fileLayout.addWidget(btn)
+            self._actionBtns.append(btn)
+
+        # ── Page 3: 配置 ──
+        cfgPage = self._buildConfigPage()
+
+        # ── Page 4: 验证码 ──
+        tokenPage = self._buildTokenPage()
+
+        # 注册到 Pivot
+        self._addActionPage(opPage, "opPage", "操作")
+        self._addActionPage(filePage, "filePage", "文件")
+        self._addActionPage(cfgPage, "cfgPage", "配置")
+        self._addActionPage(tokenPage, "tokenPage", "验证码")
+
+        self._actionStack.currentChanged.connect(self._onActionPageChanged)
+        self._actionStack.setCurrentWidget(opPage)
+        self._actionPivot.setCurrentItem("opPage")
+
+        # 连接按钮信号（操作: 0-3, 文件: 4-7）
+        self._actionBtns[0].clicked.connect(self._oneClickStart)
+        self._actionBtns[1].clicked.connect(self._startExeOnAll)
+        self._actionBtns[2].clicked.connect(self._stopExeOnAll)
+        self._actionBtns[3].clicked.connect(self._rebootAllPC)
+        self._actionBtns[4].clicked.connect(self._exportQualified)
+        self._actionBtns[5].clicked.connect(self._sendFileToAll)
+        self._actionBtns[6].clicked.connect(self._deleteFileOnAll)
+        self._actionBtns[7].clicked.connect(self._distributeKey)
 
         return panel
+
+    def _addActionPage(self, widget: QWidget, key: str, text: str) -> None:
+        """注册一个页面到 Pivot + QStackedWidget"""
+        widget.setObjectName(key)
+        self._actionStack.addWidget(widget)
+        self._actionPivot.addItem(
+            routeKey=key,
+            text=text,
+            onClick=lambda: self._actionStack.setCurrentWidget(widget),
+        )
+
+    def _onActionPageChanged(self, index: int) -> None:
+        widget = self._actionStack.widget(index)
+        self._actionPivot.setCurrentItem(widget.objectName())
+
+    def _buildConfigPage(self) -> QWidget:
+        """配置页：使用 GroupHeaderCardWidget"""
+        cfgPage = QWidget()
+        cfgPage.setObjectName("cfgPage")
+        cfgLayout = QVBoxLayout(cfgPage)
+        cfgLayout.setContentsMargins(0, 6, 0, 0)
+        cfgLayout.setSpacing(10)
+
+        card = GroupHeaderCardWidget(cfgPage)
+        card.setTitle("节点配置")
+        card.setBorderRadius(8)
+
+        self._cfgTeammate = ComboBox(cfgPage)
+        self._cfgTeammate.addItems(["开启", "关闭"])
+        self._cfgTeammate.setCurrentText(_DEFAULT_TEAMMATE_TEXT)
+        self._cfgTeammate.setFixedWidth(120)
+        card.addGroup(FIF.PEOPLE, "补齐队友", "是否自动补满队伍", self._cfgTeammate)
+
+        self._cfgWeapon = ComboBox(cfgPage)
+        self._cfgWeapon.addItems(_WEAPONS)
+        self._cfgWeapon.setCurrentText(_DEFAULT_WEAPON)
+        self._cfgWeapon.setFixedWidth(160)
+        card.addGroup(FIF.GAME, "武器配置", "推送武器模板到节点", self._cfgWeapon)
+
+        self._cfgLevel = SpinBox(cfgPage)
+        self._cfgLevel.setRange(1, 50)
+        self._cfgLevel.setValue(_DEFAULT_LEVEL)
+        self._cfgLevel.setFixedWidth(120)
+        card.addGroup(FIF.FLAG, "下号等级", "达标后自动换号", self._cfgLevel)
+
+        self._cfgLoot = SpinBox(cfgPage)
+        self._cfgLoot.setRange(0, 30)
+        self._cfgLoot.setValue(_DEFAULT_LOOT)
+        self._cfgLoot.setFixedWidth(120)
+        group = card.addGroup(FIF.SHOPPING_CART, "舔包次数", "每局舔包上限", self._cfgLoot)
+        group.setSeparatorVisible(True)
+
+        # 底部工具栏
+        bottomLayout = QHBoxLayout()
+        bottomLayout.setContentsMargins(24, 15, 24, 20)
+        bottomLayout.setSpacing(10)
+        hintLabel = CaptionLabel("选中节点自动回填，未选中时作用全部在线节点")
+        bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        bottomLayout.addStretch(1)
+        btnPush = PrimaryPushButton(FIF.SYNC, "下发配置")
+        btnPush.setObjectName("btnPushConfig")
+        btnPush.setFixedHeight(36)
+        btnPush.clicked.connect(self._pushConfigToNodes)
+        bottomLayout.addWidget(btnPush, 0, Qt.AlignmentFlag.AlignRight)
+        card.vBoxLayout.addLayout(bottomLayout)
+
+        cfgLayout.addWidget(card)
+        cfgLayout.addStretch()
+
+        return cfgPage
+
+    def _buildTokenPage(self) -> QWidget:
+        """验证码页：API Key 输入 + 持久化 + 一键下发到 token.txt"""
+        page = QWidget()
+        page.setObjectName("tokenPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(10)
+
+        card = GroupHeaderCardWidget(page)
+        card.setTitle("验证码管理")
+        card.setBorderRadius(8)
+
+        # 充值链接
+        link = HyperlinkLabel(page)
+        link.setText("前往充值")
+        link.setUrl("https://ai.xinyuocr.xyz/home")
+        card.addGroup(FIF.LINK, "充值链接", "点击右侧链接前往充值页面", link)
+
+        # API Key 输入
+        self._tokenInput = LineEdit(page)
+        self._tokenInput.setPlaceholderText("粘贴你的 API Key")
+        self._tokenInput.setClearButtonEnabled(True)
+        self._tokenInput.setFixedWidth(220)
+        # 从配置加载已保存的 Key
+        saved_key = self._pool.get_config("api_key")
+        if saved_key:
+            self._tokenInput.setText(saved_key)
+        card.addGroup(FIF.FINGERPRINT, "API Key", "充值后复制 Key 粘贴到此处", self._tokenInput)
+
+        # 底部工具栏
+        bottomLayout = QHBoxLayout()
+        bottomLayout.setContentsMargins(24, 15, 24, 20)
+        bottomLayout.setSpacing(10)
+        hintLabel = CaptionLabel("保存后下发到选中/全部在线节点的 token.txt")
+        bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        bottomLayout.addStretch(1)
+
+        btnSave = PushButton(FIF.SAVE, "保存", page)
+        btnSave.setFixedHeight(36)
+        btnSave.clicked.connect(self._saveApiKey)
+        bottomLayout.addWidget(btnSave)
+
+        btnPush = PrimaryPushButton(FIF.SEND, "保存并下发")
+        btnPush.setObjectName("btnPushToken")
+        btnPush.setFixedHeight(36)
+        btnPush.clicked.connect(self._pushTokenToNodes)
+        bottomLayout.addWidget(btnPush)
+
+        card.vBoxLayout.addLayout(bottomLayout)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return page
+
+    def _saveApiKey(self) -> None:
+        """保存 API Key 到本地配置"""
+        key = self._tokenInput.text().strip()
+        if not key:
+            InfoBar.warning(
+                "提示", "请先输入 API Key",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        self._pool.set_config("api_key", key)
+        InfoBar.success(
+            "已保存", "API Key 已保存到本地配置",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
+    def _pushTokenToNodes(self) -> None:
+        """保存 API Key 并下发到选中/全部在线节点的 token.txt"""
+        key = self._tokenInput.text().strip()
+        if not key:
+            InfoBar.warning(
+                "提示", "请先输入 API Key",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        # 先保存到本地
+        self._pool.set_config("api_key", key)
+        # 再下发到节点
+        ips, selected = self._getTargetIPs()
+        if not ips:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        if not selected and not self._confirmDangerous(
+            "下发 API Key",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点下发，是否继续？",
+        ):
+            return
+        self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"token.txt|{key}")
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        self._nm.add_history("下发 API Key", scope)
+        InfoBar.success(
+            "已下发", f"API Key 已保存并发送到 {scope}",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
 
     # ──────────────────────────────────────────────────────
     # 节点表格更新
@@ -378,22 +658,59 @@ class BigScreenInterface(ScrollArea):
             if item:
                 self._row_map[item.text()] = row
 
-    def _scheduleRefreshTable(self, _name: str = "") -> None:
+    def _scheduleRefreshTable(self, name: str = "") -> None:
         """防抖：100ms 内的多次信号合并为一次刷新"""
+        if name:
+            self._pending_updates.add(name)
         if not self._tableRefreshTimer.isActive():
             self._tableRefreshTimer.start()
 
     def _refreshNodeTable(self) -> None:
-        """全量重建节点表格（与 AccountInterface._refreshTable 同模式）"""
+        """增量更新节点表格：只更新变化的行，新增/删除时才重建"""
+        # 更新分组下拉选项
+        groups = self._nm.groups
+        current = self._groupCombo.currentText()
+        self._groupCombo.blockSignals(True)
+        self._groupCombo.clear()
+        self._groupCombo.addItem("全部")
+        for g in groups:
+            self._groupCombo.addItem(g)
+        idx = self._groupCombo.findText(current)
+        self._groupCombo.setCurrentIndex(max(idx, 0))
+        self._groupCombo.blockSignals(False)
+
+        # 按分组筛选
+        group_filter = self._groupCombo.currentText()
         nodes = list(self._nm.nodes.values())
-        self.table.setUpdatesEnabled(False)
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(nodes))
-        for row, node in enumerate(nodes):
+        if group_filter != "全部":
+            nodes = [n for n in nodes if n.group == group_filter]
+
+        visible_names = {n.machine_name for n in nodes}
+        table_names = set(self._row_map.keys())
+        pending = self._pending_updates.copy()
+        self._pending_updates.clear()
+
+        # 结构变化（新增/删除节点）→ 全量重建
+        if visible_names != table_names:
+            self.table.setUpdatesEnabled(False)
+            self.table.setSortingEnabled(False)
+            self.table.setRowCount(len(nodes))
+            for row, node in enumerate(nodes):
+                self._setRowData(row, node)
+            self.table.setSortingEnabled(True)
+            self.table.setUpdatesEnabled(True)
+            self._rebuildRowMap()
+            return
+
+        # 结构不变 → 只更新有变化的行
+        for name in pending:
+            row = self._row_map.get(name)
+            if row is None:
+                continue
+            node = self._nm.nodes.get(name)
+            if node is None:
+                continue
             self._setRowData(row, node)
-        self.table.setSortingEnabled(True)
-        self.table.setUpdatesEnabled(True)
-        self._rebuildRowMap()
 
     def _setRowData(self, row: int, node) -> None:
         texts = [
@@ -403,8 +720,15 @@ class BigScreenInterface(ScrollArea):
             node.current_account or "--",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
-            node.elapsed if node.elapsed != "0" else "--",
+            self._format_elapsed(node.elapsed),
             node.game_state if node.game_state else node.status,
+            f"{node.cpu_percent:.0f}%",
+            f"{node.mem_percent:.0f}%",
+            node.slave_version or "--",
+            self._teammate_fill_display(node.teammate_fill),
+            node.weapon_config or "--",
+            node.level_threshold or "--",
+            node.loot_count or "--",
         ]
 
         # 状态列：彩色圆点图标
@@ -417,7 +741,7 @@ class BigScreenInterface(ScrollArea):
         status_item.setIcon(status_icon)
         status_item.setText("")
 
-        # 文本列：全量写入
+        # 文本列：仅更新变化的单元格
         for col in range(1, len(texts)):
             text = texts[col]
             item = self.table.item(row, col)
@@ -425,14 +749,15 @@ class BigScreenInterface(ScrollArea):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, col, item)
-            else:
+            elif item.text() != text:
                 item.setText(text)
 
-        # 运行状态列着色
+        # 运行状态列着色（仅变化时）
         state_item = self.table.item(row, 7)
         if state_item:
             color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
-            state_item.setForeground(color)
+            if state_item.foreground().color() != color:
+                state_item.setForeground(color)
 
     # ──────────────────────────────────────────────────────
     # 标题栏刷新
@@ -461,28 +786,43 @@ class BigScreenInterface(ScrollArea):
         )
         self._refreshHeader()
         # 动态更新"提取合格出货"按钮文案
-        btn = self._actionBtns[1]
+        btn = self._actionBtns[4]
         count = p.completed_count
         btn.setText(f"提取合格出货 ({count})" if count else "提取合格出货")
 
     def _refreshAccountTable(self) -> None:
         """从 AccountDB 刷新账号表格"""
         accounts = self._pool.get_all_accounts()
-        self.accountTable.setRowCount(len(accounts))
         _MASK = "••••••••"
+        self.accountTable.setUpdatesEnabled(False)
+        self.accountTable.setRowCount(len(accounts))
         for row, acc in enumerate(accounts):
-            self.accountTable.setItem(row, 0, QTableWidgetItem(acc.username))
-            self.accountTable.setItem(row, 1, QTableWidgetItem(_MASK))
-            self.accountTable.setItem(row, 2, QTableWidgetItem(acc.bind_email))
-            self.accountTable.setItem(row, 3, QTableWidgetItem(_MASK if acc.bind_email_password else ""))
-            self.accountTable.setItem(row, 4, QTableWidgetItem(acc.status.value))
-            self.accountTable.setItem(row, 5, QTableWidgetItem(acc.assigned_machine))
-            self.accountTable.setItem(row, 6, QTableWidgetItem(str(acc.level) if acc.level else ""))
-            self.accountTable.setItem(row, 7, QTableWidgetItem(acc.jin_bi if acc.jin_bi != "0" else ""))
-            created_str = acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else ""
-            self.accountTable.setItem(row, 8, QTableWidgetItem(created_str))
-            time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
-            self.accountTable.setItem(row, 9, QTableWidgetItem(time_str))
+            vals = [
+                acc.username,
+                _MASK,
+                acc.bind_email,
+                _MASK if acc.bind_email_password else "",
+                acc.status.value,
+                acc.assigned_machine,
+                str(acc.level) if acc.level else "",
+                acc.jin_bi if acc.jin_bi != "0" else "",
+                acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else "",
+                acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
+            ]
+            for col, text in enumerate(vals):
+                item = self.accountTable.item(row, col)
+                if item is None:
+                    item = QTableWidgetItem(text)
+                    self.accountTable.setItem(row, col, item)
+                else:
+                    item.setText(text)
+            # 状态列着色
+            status_item = self.accountTable.item(row, 4)
+            if status_item:
+                color = _ACCOUNT_STATUS_COLORS.get(acc.status.value)
+                if color:
+                    status_item.setForeground(color)
+        self.accountTable.setUpdatesEnabled(True)
 
     def _showImportDialog(self) -> None:
         """弹窗导入账号"""
@@ -496,9 +836,12 @@ class BigScreenInterface(ScrollArea):
         if dlg.exec():
             text = edit.toPlainText().strip()
             if text:
-                self._pool.load_from_text(text)
+                inserted, skipped = self._pool.load_from_text(text)
+                msg = f"已导入 {inserted} 个"
+                if skipped:
+                    msg += f"，跳过 {skipped} 个重复"
                 InfoBar.success(
-                    "导入成功", "已导入账号",
+                    "导入成功", msg,
                     parent=self, position=InfoBarPosition.TOP, duration=3000,
                 )
 
@@ -541,48 +884,19 @@ class BigScreenInterface(ScrollArea):
         nodes, is_sel = self._getSelectedOnlineNodes()
         return [n.ip for n in nodes], is_sel
 
+    def _resetConfigPanel(self) -> None:
+        """恢复配置面板默认值，避免节点切换后残留旧值。"""
+        self._cfgTeammate.setCurrentText(_DEFAULT_TEAMMATE_TEXT)
+        self._cfgWeapon.setCurrentText(_DEFAULT_WEAPON)
+        self._cfgLevel.setValue(_DEFAULT_LEVEL)
+        self._cfgLoot.setValue(_DEFAULT_LOOT)
+
     def _confirmDangerous(self, title: str, content: str) -> bool:
         """危险操作二次确认对话框"""
         dlg = MessageBox(title, content, self.window())
         dlg.yesButton.setText("确认执行")
         dlg.cancelButton.setText("取消")
         return bool(dlg.exec())
-
-    def _distributeAccounts(self) -> None:
-        """分发账号：遍历在线节点，每台分配一个空闲账号并单播"""
-        online_nodes, selected = self._getSelectedOnlineNodes()
-        if not online_nodes:
-            InfoBar.warning(
-                "提示", "没有在线节点",
-                parent=self, position=InfoBarPosition.TOP, duration=2000,
-            )
-            return
-        scope = "选中" if selected else "在线"
-        distributed = 0
-        for node in online_nodes:
-            # 已有绑定账号的节点：重发
-            existing = self._pool.get_account_for_machine(node.machine_name)
-            if existing:
-                self._tcp.send(node.ip, TcpCommand.UPDATE_TXT, existing.to_line())
-                distributed += 1
-                continue
-            # 分配新账号
-            acc = self._pool.allocate(node.machine_name)
-            if acc is None:
-                break
-            self._tcp.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
-            distributed += 1
-        if distributed:
-            self._nm.add_history("分发账号", f"{distributed} 个{scope}节点")
-            InfoBar.success(
-                "分发成功", f"已分发 {distributed} 个账号到{scope}节点",
-                parent=self, position=InfoBarPosition.TOP, duration=3000,
-            )
-        else:
-            InfoBar.info(
-                "提示", "没有可分发的空闲账号",
-                parent=self, position=InfoBarPosition.TOP, duration=2000,
-            )
 
     def _exportQualified(self) -> None:
         """提取合格出货"""
@@ -716,6 +1030,11 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        if not selected and not self._confirmDangerous(
+            "确认操作",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点执行，是否继续？",
+        ):
+            return
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         self._tcp.broadcast(ips, TcpCommand.START_EXE)
         self._nm.add_history("启动脚本", scope)
@@ -734,6 +1053,11 @@ class BigScreenInterface(ScrollArea):
             )
             return
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not selected and not self._confirmDangerous(
+            "确认操作",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点执行，是否继续？",
+        ):
+            return
         if not self._confirmDangerous(
             "强制重启电脑",
             f"即将强制重启 {scope} 电脑，所有未保存数据将丢失",
@@ -756,6 +1080,11 @@ class BigScreenInterface(ScrollArea):
             )
             return
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not selected and not self._confirmDangerous(
+            "确认操作",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点执行，是否继续？",
+        ):
+            return
         if not self._confirmDangerous(
             "停止脚本游戏",
             f"即将停止 {scope} 的脚本和游戏进程",
@@ -966,3 +1295,157 @@ class BigScreenInterface(ScrollArea):
             "通信失败", f"{ip}: {error}",
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
+
+    def _oneClickStart(self) -> None:
+        """一键分发文件：下发配置到节点"""
+        ips, selected = self._getTargetIPs()
+        if not ips:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        if not selected and not self._confirmDangerous(
+            "一键分发文件",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点下发配置，是否继续？",
+        ):
+            return
+        teammate = "1" if self._cfgTeammate.currentText() == "开启" else "0"
+        weapon = self._cfgWeapon.currentText()
+        level = str(self._cfgLevel.value())
+        loot = str(self._cfgLoot.value())
+        for filename, content in [
+            ("补齐队友配置.txt", teammate),
+            ("武器配置.txt", weapon),
+            ("下号等级.txt", level),
+            ("舔包次数.txt", loot),
+        ]:
+            self._tcp.broadcast(
+                ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|{content}",
+            )
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        self._nm.add_history(
+            "一键分发文件", scope,
+            f"队友={teammate} 武器={weapon} 等级={level} 舔包={loot}",
+        )
+        InfoBar.success(
+            "已分发", f"配置已发送到 {scope}",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _onNodeOffline(self, name: str) -> None:
+        """节点离线通知（5s 内超过 5 个时汇总显示）"""
+        self._offline_batch.append(name)
+        if not self._offlineBatchTimer.isActive():
+            self._offlineBatchTimer.start()
+        if len(self._offline_batch) <= 5:
+            InfoBar.warning(
+                "节点离线", f"{name} 已离线",
+                parent=self, position=InfoBarPosition.TOP, duration=3000,
+            )
+
+    def _flushOfflineBatch(self) -> None:
+        """离线通知限频：批量汇总"""
+        count = len(self._offline_batch)
+        if count > 5:
+            InfoBar.warning(
+                "批量离线", f"{count} 个节点已离线",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+        self._offline_batch.clear()
+
+    def _onGroupFilterChanged(self, _text: str) -> None:
+        """分组筛选变更时刷新节点表格"""
+        self._refreshNodeTable()
+
+    @staticmethod
+    def _format_elapsed(val: str) -> str:
+        """将秒数转为人类可读格式: 80537 → 22h23m"""
+        if not val or val == "0":
+            return "--"
+        try:
+            total_sec = int(val)
+        except ValueError:
+            return val
+        if total_sec < 60:
+            return f"{total_sec}s"
+        total_min = total_sec // 60
+        hours, mins = divmod(total_min, 60)
+        if hours:
+            return f"{hours}h{mins:02d}m"
+        return f"{mins}m"
+
+    @staticmethod
+    def _teammate_fill_display(val: str) -> str:
+        match val.strip().lstrip("\ufeff"):
+            case "1":
+                return "开启"
+            case "0":
+                return "关闭"
+            case v:
+                return v or "--"
+
+    def _pushConfigToNodes(self) -> None:
+        """下发配置到选中/全部在线节点"""
+        ips, selected = self._getTargetIPs()
+        if not ips:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        if not selected and not self._confirmDangerous(
+            "下发配置",
+            f"未选中节点，将对全部 {len(ips)} 个在线节点下发配置，是否继续？",
+        ):
+            return
+        # 构建配置值
+        teammate = "1" if self._cfgTeammate.currentText() == "开启" else "0"
+        weapon = self._cfgWeapon.currentText()
+        level = str(self._cfgLevel.value())
+        loot = str(self._cfgLoot.value())
+        configs = [
+            ("补齐队友配置.txt", teammate),
+            ("武器配置.txt", weapon),
+            ("下号等级.txt", level),
+            ("舔包次数.txt", loot),
+        ]
+        for filename, content in configs:
+            payload = f"{filename}|{content}"
+            self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, payload)
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        self._nm.add_history(
+            "下发配置", scope,
+            f"队友={teammate} 武器={weapon} 等级={level} 舔包={loot}",
+        )
+        InfoBar.success(
+            "已下发", f"配置已发送到 {scope}",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _onNodeSelectionChanged(self) -> None:
+        """节点表格选中变化时，回填配置面板"""
+        selected = self.table.selectionModel().selectedRows()
+        if len(selected) != 1:
+            return
+        row = selected[0].row()
+        name_item = self.table.item(row, 1)
+        if not name_item:
+            return
+        name = name_item.text()
+        node = self._nm.nodes.get(name)
+        if not node:
+            return
+        self._resetConfigPanel()
+        if node.teammate_fill == "1":
+            self._cfgTeammate.setCurrentText("开启")
+        elif node.teammate_fill == "0":
+            self._cfgTeammate.setCurrentText(_DEFAULT_TEAMMATE_TEXT)
+        if node.weapon_config:
+            idx = self._cfgWeapon.findText(node.weapon_config)
+            if idx >= 0:
+                self._cfgWeapon.setCurrentIndex(idx)
+        if node.level_threshold and node.level_threshold.isdigit():
+            self._cfgLevel.setValue(int(node.level_threshold))
+        if node.loot_count and node.loot_count.isdigit():
+            self._cfgLoot.setValue(int(node.loot_count))

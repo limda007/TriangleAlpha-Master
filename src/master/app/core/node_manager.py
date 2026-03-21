@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from common.models import NodeInfo, OperationRecord
-from common.protocol import DISCONNECT_TIMEOUT, GameState, OFFLINE_TIMEOUT, UdpMessage, UdpMessageType
+from common.protocol import DISCONNECT_TIMEOUT, OFFLINE_TIMEOUT, GameState, UdpMessage, UdpMessageType
 
 _MAX_HISTORY = 1000
 
@@ -40,15 +40,15 @@ class NodeManager(QObject):
 
     def handle_udp_message(self, msg: UdpMessage, remote_ip: str) -> None:
         """根据消息类型分派处理"""
-        handlers = {
-            UdpMessageType.ONLINE: self._handle_online,
-            UdpMessageType.EXT_ONLINE: self._handle_ext_online,
-            UdpMessageType.OFFLINE: self._handle_offline,
-            UdpMessageType.STATUS: self._handle_status,
-        }
-        handler = handlers.get(msg.type)
-        if handler:
-            handler(msg, remote_ip)
+        match msg.type:
+            case UdpMessageType.ONLINE:
+                self._handle_online(msg, remote_ip)
+            case UdpMessageType.EXT_ONLINE:
+                self._handle_ext_online(msg, remote_ip)
+            case UdpMessageType.OFFLINE:
+                self._handle_offline(msg, remote_ip)
+            case UdpMessageType.STATUS:
+                self._handle_status(msg, remote_ip)
 
     def check_timeouts(self) -> None:
         """检查超时节点，标记离线 / 断连"""
@@ -152,6 +152,10 @@ class NodeManager(QObject):
                 cpu_percent=msg.cpu_percent,
                 mem_percent=msg.mem_percent,
                 slave_version=msg.slave_version,
+                teammate_fill=msg.teammate_fill,
+                weapon_config=msg.weapon_config,
+                level_threshold=msg.level_threshold,
+                loot_count=msg.loot_count,
             )
         else:
             node = self.nodes[name]
@@ -162,6 +166,10 @@ class NodeManager(QObject):
             node.cpu_percent = msg.cpu_percent
             node.mem_percent = msg.mem_percent
             node.slave_version = msg.slave_version
+            node.teammate_fill = msg.teammate_fill
+            node.weapon_config = msg.weapon_config
+            node.level_threshold = msg.level_threshold
+            node.loot_count = msg.loot_count
             node.last_seen = datetime.now()
         if is_new:
             self.node_online.emit(name)
@@ -186,17 +194,21 @@ class NodeManager(QObject):
             self.node_online.emit(name)
         node = self.nodes[name]
         # 写入 game_state 而非 status（status 由心跳和超时管理）
-        if msg.state == GameState.SCRIPT_STOPPED:
+        state = GameState.normalize(msg.state)
+        if state == GameState.SCRIPT_STOPPED:
             node.game_state = ""
             node.current_account = ""
             node.level = 0
             node.jin_bi = "0"
             node.elapsed = "0"
         else:
-            node.game_state = msg.state if msg.state else node.game_state
-            node.level = msg.level
-            node.jin_bi = msg.jin_bi
-            node.elapsed = msg.elapsed
+            node.game_state = state if state else node.game_state
+            if msg.level:
+                node.level = msg.level
+            if msg.jin_bi and msg.jin_bi != "0":
+                node.jin_bi = msg.jin_bi
+            if msg.elapsed and msg.elapsed != "0":
+                node.elapsed = msg.elapsed
             # desc 字段携带当前挂机的游戏账号名
             if msg.desc:
                 node.current_account = msg.desc

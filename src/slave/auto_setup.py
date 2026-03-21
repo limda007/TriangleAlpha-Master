@@ -10,6 +10,10 @@ from pathlib import Path
 
 import psutil
 
+from slave.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def setup_startup() -> None:
     """创建开机自启动快捷方式 (Windows only)"""
@@ -27,9 +31,9 @@ def setup_startup() -> None:
         )
         winreg.SetValueEx(key, "TriangleAlphaSlave", 0, winreg.REG_SZ, exe_path)  # type: ignore[attr-defined]
         winreg.CloseKey(key)  # type: ignore[attr-defined]
-        print("[自启动] 已注册")
-    except Exception as e:
-        print(f"[自启动] 失败: {e}")
+        logger.info("自启动已注册")
+    except Exception:
+        logger.exception("自启动注册失败")
 
 
 def check_rename(base_dir: Path) -> None:
@@ -46,19 +50,19 @@ def check_rename(base_dir: Path) -> None:
         # M10: 白名单校验，仅允许字母数字、连字符、下划线
         import re
         if not re.fullmatch(r"[A-Za-z0-9\-_]+", target):
-            print(f"[改名] 拒绝非法字符: {target}")
+            logger.warning("改名拒绝非法字符: %s", target)
             return
         if platform.node().lower() == target.lower():
             return
-        print(f"[改名] 发现标识: {files[0].name} → {target}")
+        logger.info("发现改名标识: %s -> %s", files[0].name, target)
         subprocess.run(  # noqa: S603
             ["wmic", "computersystem", "where", f'name="{platform.node()}"', "rename", target],
             shell=False,
             check=False,
         )
-        print("[改名] 已提交，需重启生效")
-    except Exception as e:
-        print(f"[改名] 异常: {e}")
+        logger.info("改名已提交，需重启生效")
+    except Exception:
+        logger.exception("改名流程异常")
 
 
 async def kill_remote_controls(base_dir: Path) -> None:
@@ -66,9 +70,43 @@ async def kill_remote_controls(base_dir: Path) -> None:
     await asyncio.sleep(30)
     list_file = base_dir / "关闭远控列表.txt"
     if not list_file.exists():
-        template = "# 一行一个进程名（不含 .exe）\n# ToDesk\n# SunloginClient\n# TeamViewer\n# AnyDesk\n"
+        template = (
+            "# ========================================\n"
+            "# 关闭远控列表\n"
+            "# 一行一个进程名（不含 .exe），# 开头为注释\n"
+            "# 去掉 # 即启用对应项\n"
+            "# ========================================\n"
+            "\n"
+            "# ── 远程桌面 ──\n"
+            "ToDesk\n"
+            "ToDesk_Service\n"
+            "SunloginClient\n"
+            "SunloginRemote\n"
+            "TeamViewer\n"
+            "TeamViewer_Service\n"
+            "AnyDesk\n"
+            "# RustDesk\n"
+            "# parsec\n"
+            "# RemoteDesktop\n"
+            "\n"
+            "# ── 远程协助 ──\n"
+            "# TightVNC\n"
+            "# tvnserver\n"
+            "# UltraVNC\n"
+            "# winvnc\n"
+            "# RealVNC\n"
+            "# vncserver\n"
+            "\n"
+            "# ── 其他远控 ──\n"
+            "# LookMyPC\n"
+            "# GotoHTTP\n"
+            "# Radmin\n"
+            "# rserver3\n"
+            "# Ammyy\n"
+            "# AA_v3\n"
+        )
         list_file.write_text(template, encoding="utf-8")
-        print("[远控查杀] 已生成模板文件")
+        logger.info("已生成远控查杀模板文件")
         return
 
     killed = 0
@@ -84,8 +122,8 @@ async def kill_remote_controls(base_dir: Path) -> None:
                 if pname and pname.lower() == name.lower() + ".exe":
                     proc.kill()
                     killed += 1
-                    print(f"[查杀] {pname}")
+                    logger.info("查杀: %s", pname)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
     if killed:
-        print(f"[远控查杀] 共清理 {killed} 个进程")
+        logger.info("远控查杀共清理 %s 个进程", killed)

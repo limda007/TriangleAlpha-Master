@@ -163,7 +163,7 @@ class TestH7SlaveExtQuery:
 
     def test_remaining_commands(self):
         expected = {"UPDATE_TXT", "START_EXE", "STOP_EXE", "REBOOT_PC",
-                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP"}
+                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP", "EXT_SET_CONFIG"}
         assert {m.name for m in TcpCommand} == expected
 
 

@@ -1,4 +1,4 @@
-"""后台服务线程 — 在 QThread 内运行 asyncio event loop"""
+"""后台服务线程 — 在 QThread 内运行 asyncio event loop。"""
 from __future__ import annotations
 
 import asyncio
@@ -12,36 +12,26 @@ from pathlib import Path
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from common.protocol import HEARTBEAT_INTERVAL, GameState
 from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
 from slave.command_handler import CommandHandler
 from slave.heartbeat import HeartbeatService
 from slave.log_reporter import LogReporter
+from slave.logging_utils import configure_slave_logging, get_logger
+from slave.state_store import RuntimeStatus, SlaveStateStore
 
-from common.protocol import GameState
+logger = get_logger(__name__)
 
 
 class SlaveBackend(QThread):
-    """在独立线程中运行所有 asyncio 后台服务
+    """在独立线程中运行所有 asyncio 后台服务。"""
 
-    注意: 所有 pyqtSignal.emit() 从本线程（QThread）调用。
-    Qt6 自动识别跨线程连接（QueuedConnection），信号参数（int/float/str/bool）
-    均为 Qt 可序列化类型，因此是线程安全的。
-    回调中不得直接操作 GUI 对象。
-    """
-
-    # (心跳计数, CPU%, MEM%)
     heartbeat_sent = pyqtSignal(int, float, float)
-    # 指令描述
     command_received = pyqtSignal(str)
-    # 账号数量更新
     account_updated = pyqtSignal(int)
-    # TestDemo 进程状态 (running?)
     script_status = pyqtSignal(bool)
-    # 分组变更
     group_changed = pyqtSignal(str)
-    # 日志行（供 GUI 显示）
     log_entry = pyqtSignal(str)
-    # 错误信息
     error_occurred = pyqtSignal(str)
 
     def __init__(self, base_dir: Path, master_ip: str | None, parent: object = None) -> None:
@@ -50,20 +40,22 @@ class SlaveBackend(QThread):
         self._master_ip = master_ip
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = True
-        # C1: 存储任务引用，用于优雅关闭时取消
         self._tasks: list[asyncio.Task[None]] = []
+        self._state_store = SlaveStateStore(base_dir)
+        self._script_running = False
+        self._script_started_at: float | None = None
 
     def run(self) -> None:
-        """QThread 入口 — 创建 asyncio loop 并运行所有服务"""
+        """QThread 入口。"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
         try:
             loop.run_until_complete(self._run_services())
         except Exception as exc:
+            logger.exception("后台服务线程异常")
             self.error_occurred.emit(str(exc))
         finally:
-            # 清理所有未完成的 task
             pending = asyncio.all_tasks(loop)
             for task in pending:
                 task.cancel()
@@ -74,19 +66,20 @@ class SlaveBackend(QThread):
     async def _run_services(self) -> None:
         start_time = time.time()
 
-        # P1: 同步操作放入线程池，不阻塞 event loop
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, setup_startup)
         await loop.run_in_executor(None, check_rename, self._base_dir)
 
-        # 启动时读取已有账号数
         self._emit_account_count()
 
-        # 构建核心服务，注入回调
+        settings = self._state_store.load_settings()
         self._heartbeat = HeartbeatService(
             master_ip=self._master_ip,
             on_sent=self._on_heartbeat,
+            base_dir=self._base_dir,
         )
+        self._heartbeat.set_group(settings.group)
+
         handler = CommandHandler(
             str(self._base_dir),
             on_command=self._on_command,
@@ -95,13 +88,11 @@ class SlaveBackend(QThread):
         )
         log_reporter = LogReporter(self._master_ip, self._heartbeat.machine_name)
 
-        # stdout 拦截
         log_reporter.install()
+        configure_slave_logging(gui_sink=self.log_entry.emit)
 
-        # 分组回调（心跳用）
         handler.set_group_callback(self._heartbeat.set_group)
-
-        self.log_entry.emit("[就绪] 服务已启动")
+        logger.info("服务已启动")
 
         self._tasks = [
             asyncio.create_task(self._heartbeat.run()),
@@ -110,6 +101,7 @@ class SlaveBackend(QThread):
             asyncio.create_task(kill_remote_controls(self._base_dir)),
             asyncio.create_task(self._status_writer(self._base_dir, self._heartbeat, start_time)),
             asyncio.create_task(self._process_monitor()),
+            asyncio.create_task(self._status_reporter()),
         ]
 
         try:
@@ -120,13 +112,10 @@ class SlaveBackend(QThread):
             self._heartbeat.stop()
             await handler.stop()
             await log_reporter.stop()
-            # C1: 取消所有未完成的子任务
             for task in self._tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*self._tasks, return_exceptions=True)
-
-    # ── 回调 ──────────────────────────────────────────
 
     def _on_heartbeat(self, count: int, cpu: float, mem: float) -> None:
         self.heartbeat_sent.emit(count, cpu, mem)
@@ -138,39 +127,50 @@ class SlaveBackend(QThread):
         self.account_updated.emit(count)
 
     def _on_group_changed(self, group: str) -> None:
+        try:
+            self._state_store.save_group(group)
+        except OSError:
+            logger.exception("分组持久化失败: %s", group)
         self.group_changed.emit(group)
+        logger.info("分组已持久化: %s", group)
 
     def _emit_account_count(self) -> None:
-        """读取 accounts.txt 行数并发射信号"""
         acc_file = self._base_dir / "accounts.txt"
-        if acc_file.exists():
-            try:
-                content = acc_file.read_text(encoding="utf-8")
-                count = sum(1 for line in content.splitlines() if line.strip())
-                self.account_updated.emit(count)
-            except OSError:
-                pass
-
-    # ── 进程监控 ──────────────────────────────────────
+        if not acc_file.exists():
+            return
+        try:
+            content = acc_file.read_text(encoding="utf-8")
+        except OSError:
+            return
+        count = sum(1 for line in content.splitlines() if line.strip())
+        self.account_updated.emit(count)
 
     async def _process_monitor(self) -> None:
-        """每 10s 检测 TestDemo.exe 是否存活，状态变化时上报 master"""
+        """每 10s 检测 TestDemo.exe 是否存活，状态变化时上报 master。"""
         was_running = False
         while self._running:
             running = self._is_testdemo_running()
+            self._script_running = running
             self.script_status.emit(running)
-            # 检测到 TestDemo 从运行→停止，上报 master
+
+            if running and not was_running:
+                self._script_started_at = time.time()
+                logger.info("检测到 TestDemo 启动")
+
             if was_running and not running:
+                self._script_started_at = None
                 try:
                     self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
-                except Exception as e:
-                    print(f"[状态上报] 发送失败: {e}")
+                    self._state_store.clear_runtime_status()
+                    logger.info("检测到 TestDemo 停止，已上报脚本停止状态")
+                except Exception:
+                    logger.exception("发送脚本停止状态失败")
+
             was_running = running
             await asyncio.sleep(10)
 
     @staticmethod
     def _is_testdemo_running() -> bool:
-        # P0: 使用 attrs 缓存机制减少系统调用开销
         for proc in psutil.process_iter(["name"], ad_value=""):
             try:
                 name = proc.info.get("name", "")
@@ -180,12 +180,40 @@ class SlaveBackend(QThread):
                 pass
         return False
 
-    # ── 状态文件 ──────────────────────────────────────
+    async def _status_reporter(self) -> None:
+        """周期性发送 STATUS，保证 master 的状态链路持续闭环。"""
+        while self._running:
+            if self._script_running:
+                snapshot = self._load_runtime_snapshot()
+                try:
+                    self._heartbeat.send_status(
+                        snapshot.state,
+                        snapshot.level,
+                        snapshot.jin_bi,
+                        snapshot.current_account,
+                        snapshot.elapsed,
+                    )
+                except Exception:
+                    logger.exception("周期性状态上报失败")
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
 
-    async def _status_writer(
-        self, base_dir: Path, heartbeat: HeartbeatService, start_time: float,
-    ) -> None:
-        """定期写入 slave_status.json"""
+    def _load_runtime_snapshot(self) -> RuntimeStatus:
+        default_elapsed = "0"
+        if self._script_started_at is not None:
+            default_elapsed = str(max(0, int(time.time() - self._script_started_at)))
+        snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
+        if snapshot.state == GameState.SCRIPT_STOPPED:
+            return RuntimeStatus(
+                state=GameState.RUNNING,
+                level=snapshot.level,
+                jin_bi=snapshot.jin_bi,
+                current_account=snapshot.current_account,
+                elapsed=snapshot.elapsed,
+            )
+        return snapshot
+
+    async def _status_writer(self, base_dir: Path, heartbeat: HeartbeatService, start_time: float) -> None:
+        """定期写入 slave_status.json。"""
         status_file = base_dir / "slave_status.json"
         while self._running:
             uptime_sec = int(time.time() - start_time)
@@ -197,6 +225,9 @@ class SlaveBackend(QThread):
                 "pid": os.getpid(),
                 "machine": heartbeat.machine_name,
                 "status": "running",
+                "group": heartbeat.group,
+                "master_ip": self._master_ip or "",
+                "script_running": self._script_running,
                 "uptime": uptime_str,
                 "uptime_sec": uptime_sec,
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -206,21 +237,16 @@ class SlaveBackend(QThread):
                     json.dumps(status, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
-            # P1: 写入间隔从 5s → 30s，减少频繁 I/O
             await asyncio.sleep(30)
 
-    # C1: 重写 stop()，通过取消任务实现优雅关闭
     def stop(self) -> None:
-        """请求后台服务停止"""
+        """请求后台服务停止。"""
         self._running = False
         if self._loop and self._loop.is_running():
-            try:
+            with contextlib.suppress(RuntimeError):
                 self._loop.call_soon_threadsafe(self._request_shutdown)
-            except RuntimeError:
-                pass  # loop 已关闭
 
     def _request_shutdown(self) -> None:
-        """在 event loop 线程中取消所有任务（由 call_soon_threadsafe 调用）"""
         for task in self._tasks:
             if not task.done():
                 task.cancel()

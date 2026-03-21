@@ -31,15 +31,15 @@ from qfluentwidgets import (
 )
 
 from master.app.components.stat_card import StatCard
-from master.app.core.account_pool import AccountPool
+from master.app.core.account_db import AccountDB
 
-_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "完成时间"]
+_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
 _MASK = "••••••••"
 _SECRET_COLS = {1, 3}  # password + email password columns
 
 
 class AccountInterface(ScrollArea):
-    def __init__(self, account_pool: AccountPool, parent=None):
+    def __init__(self, account_pool: AccountDB, parent=None):
         super().__init__(parent)
         self.setObjectName("accountInterface")
         self._pool = account_pool
@@ -56,7 +56,7 @@ class AccountInterface(ScrollArea):
         statsLayout.setSpacing(12)
         self.totalCard = StatCard("总数", "0")
         self.availableCard = StatCard("可用", "0")
-        self.inUseCard = StatCard("使用中", "0")
+        self.inUseCard = StatCard("运行中", "0")
         self.completedCard = StatCard("已完成", "0")
         for card in (self.totalCard, self.availableCard, self.inUseCard, self.completedCard):
             statsLayout.addWidget(card)
@@ -68,7 +68,7 @@ class AccountInterface(ScrollArea):
         self.btnExport = PushButton(FIF.SAVE, "导出已完成", self)
         self.btnClear = PushButton(FIF.DELETE, "清空", self)
         self.statusFilter = ComboBox(self)
-        self.statusFilter.addItems(["全部", "空闲", "使用中", "已完成"])
+        self.statusFilter.addItems(["全部", "空闲中", "运行中", "已完成", "已取号"])
         self.statusFilter.setFixedWidth(100)
         toolLayout.addWidget(self.btnImport)
         toolLayout.addWidget(self.btnExport)
@@ -83,6 +83,7 @@ class AccountInterface(ScrollArea):
         self.table.setHorizontalHeaderLabels(_HEADERS)
         self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -117,24 +118,35 @@ class AccountInterface(ScrollArea):
 
     def _refreshTable(self) -> None:
         self._revealed.clear()
-        accounts = self._pool.accounts
+        accounts = self._pool.get_all_accounts()
+        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(accounts))
         for row, acc in enumerate(accounts):
-            self.table.setItem(row, 0, QTableWidgetItem(acc.username))
-            # 密码列（掩码）
-            pwd_item = QTableWidgetItem(_MASK)
-            pwd_item.setData(Qt.ItemDataRole.UserRole, acc.password)
-            self.table.setItem(row, 1, pwd_item)
-            self.table.setItem(row, 2, QTableWidgetItem(acc.bind_email))
-            # 邮箱密码列（掩码）
-            epwd_item = QTableWidgetItem(_MASK if acc.bind_email_password else "")
-            epwd_item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
-            self.table.setItem(row, 3, epwd_item)
-            self.table.setItem(row, 4, QTableWidgetItem(acc.status.value))
-            self.table.setItem(row, 5, QTableWidgetItem(acc.assigned_machine))
-            self.table.setItem(row, 6, QTableWidgetItem(str(acc.level) if acc.level else ""))
-            time_str = acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else ""
-            self.table.setItem(row, 7, QTableWidgetItem(time_str))
+            vals = [
+                acc.username,
+                _MASK,
+                acc.bind_email,
+                _MASK if acc.bind_email_password else "",
+                acc.status.value,
+                acc.assigned_machine,
+                str(acc.level) if acc.level else "",
+                acc.jin_bi if acc.jin_bi != "0" else "",
+                acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else "",
+                acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
+            ]
+            for col, text in enumerate(vals):
+                item = self.table.item(row, col)
+                if item is None:
+                    item = QTableWidgetItem(text)
+                    self.table.setItem(row, col, item)
+                else:
+                    item.setText(text)
+                # 密码列保存真实值
+                if col == 1:
+                    item.setData(Qt.ItemDataRole.UserRole, acc.password)
+                elif col == 3:
+                    item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
+        self.table.setUpdatesEnabled(True)
         self._refreshStats()
         self._applyFilter()
         self.emptyLabel.setVisible(len(accounts) == 0)
@@ -162,7 +174,7 @@ class AccountInterface(ScrollArea):
 
     def _applyFilter(self) -> None:
         status_text = self.statusFilter.currentText()
-        status_map = {"空闲": "空闲", "使用中": "使用中", "已完成": "已完成"}
+        status_map = {"空闲中": "空闲中", "运行中": "运行中", "已完成": "已完成", "已取号": "已取号"}
         target = status_map.get(status_text)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 4)  # 状态列
@@ -177,9 +189,12 @@ class AccountInterface(ScrollArea):
         )
         if not path:
             return
-        self._pool.load_from_file(path)
+        inserted, skipped = self._pool.load_from_file(path)
+        message = f"已新增 {inserted} 个账号"
+        if skipped:
+            message += f"，跳过 {skipped} 个重复"
         InfoBar.success(
-            "导入成功", f"已加载 {self._pool.total_count} 个账号",
+            "导入成功", message,
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
@@ -194,7 +209,7 @@ class AccountInterface(ScrollArea):
         if not path:
             return
         try:
-            text = self._pool.export_completed()
+            text = self._pool.export_completed(mark_fetched=True)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
         except OSError as e:
@@ -203,8 +218,9 @@ class AccountInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
+        exported = len(text.splitlines()) - 1  # 减去表头
         InfoBar.success(
-            "导出成功", f"已导出 {self._pool.completed_count} 个账号",
+            "导出成功", f"已导出 {exported} 个账号",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
@@ -214,7 +230,7 @@ class AccountInterface(ScrollArea):
         dlg = MessageBox("确认清空", f"确定要清空全部 {self._pool.total_count} 个账号吗？此操作不可撤销。", self)
         if not dlg.exec():
             return
-        self._pool.load_from_text("")
+        self._pool.clear_all()
         InfoBar.info("已清空", "账号池已清空", parent=self,
                      position=InfoBarPosition.TOP, duration=2000)
 
@@ -223,16 +239,80 @@ class AccountInterface(ScrollArea):
         if row < 0:
             return
         menu = RoundMenu(parent=self.table)
-        # 复制账号
+        # 复制操作（单行）
         acc_item = self.table.item(row, 0)
         if acc_item:
             menu.addAction(Action(FIF.COPY, "复制账号", triggered=lambda: self._copyToClipboard(acc_item.text())))
-        # 复制密码
         pwd_item = self.table.item(row, 1)
         if pwd_item:
             real_pwd = str(pwd_item.data(Qt.ItemDataRole.UserRole))
             menu.addAction(Action(FIF.COPY, "复制密码", triggered=lambda: self._copyToClipboard(real_pwd)))
+        email_item = self.table.item(row, 2)
+        if email_item and email_item.text():
+            menu.addAction(Action(FIF.COPY, "复制邮箱", triggered=lambda: self._copyToClipboard(email_item.text())))
+        epwd_item = self.table.item(row, 3)
+        if epwd_item:
+            real_epwd = str(epwd_item.data(Qt.ItemDataRole.UserRole))
+            if real_epwd:
+                menu.addAction(Action(FIF.COPY, "复制邮箱密码", triggered=lambda: self._copyToClipboard(real_epwd)))
+        menu.addAction(Action(FIF.COPY, "复制整行", triggered=lambda: self._copyFullRow(row)))
+        menu.addSeparator()
+        # 释放绑定（支持多选）
+        releasable = self._getReleasableRows()
+        if releasable:
+            count = len(releasable)
+            menu.addAction(
+                Action(
+                    FIF.REMOVE,
+                    f"释放绑定 ({count}行)" if count > 1 else "释放绑定",
+                    triggered=lambda: self._releaseSelectedAccounts(releasable),
+                )
+            )
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
+
+    def _copyFullRow(self, row: int) -> None:
+        """复制整行数据（----分隔格式）"""
+        parts = []
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item:
+                if col in _SECRET_COLS:
+                    parts.append(str(item.data(Qt.ItemDataRole.UserRole)))
+                else:
+                    parts.append(item.text())
+            else:
+                parts.append("")
+        self._copyToClipboard("----".join(parts))
+
+    def _getReleasableRows(self) -> list[str]:
+        """返回选中行中状态为'运行中'的 machine_name 列表"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            return []
+        machines = []
+        for idx in selected_rows:
+            status_item = self.table.item(idx.row(), 4)  # 状态列
+            machine_item = self.table.item(idx.row(), 5)  # 分配机器列
+            if (
+                status_item
+                and status_item.text() == "运行中"
+                and machine_item
+                and machine_item.text()
+            ):
+                machines.append(machine_item.text())
+        return machines
+
+    def _releaseSelectedAccounts(self, machines: list[str]) -> None:
+        """释放选中行的绑定账号"""
+        released = 0
+        for m in machines:
+            self._pool.release(m)
+            released += 1
+        if released:
+            InfoBar.success(
+                "已释放", f"已释放 {released} 个绑定账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
 
     def _copyToClipboard(self, text: str) -> None:
         from PyQt6.QtWidgets import QApplication
