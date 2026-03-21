@@ -82,6 +82,11 @@ a = Analysis(
         'slave.logging_utils',
         'slave.runtime_paths',
         'slave.state_store',
+        'slave.ipc_receiver',
+        'slave.log_reporter',
+        'slave.command_handler',
+        'slave.heartbeat',
+        'slave.auto_setup',
     ],
     hookspath=[],
     hooksconfig={},
@@ -123,5 +128,4 @@ else:
         name='TriangleAlpha-Slave',
         debug=False, strip=False, upx=False,
         console=False,
-        icon=exe_icon,
     )

@@ -87,6 +87,13 @@ def _read_master_ip(base_dir: Path) -> str | None:
 
 
 def main() -> None:
+    # --uninstall: 自清理后退出
+    if "--uninstall" in sys.argv:
+        from slave.auto_setup import uninstall
+        uninstall()
+        print("卸载清理完成")
+        sys.exit(0)
+
     configure_slave_logging()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 托盘模式

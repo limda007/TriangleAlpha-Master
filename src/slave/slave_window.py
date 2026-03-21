@@ -147,6 +147,12 @@ class SlaveWindow(QWidget):
         show_action.triggered.connect(self._show_window)
         menu.addAction(show_action)
 
+        menu.addSeparator()
+
+        uninstall_action = QAction("卸载并退出", self)
+        uninstall_action.triggered.connect(self._uninstall_and_quit)
+        menu.addAction(uninstall_action)
+
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(quit_action)
@@ -230,5 +236,21 @@ class SlaveWindow(QWidget):
         self.raise_()
 
     def _quit_app(self) -> None:
+        self._tray.hide()
+        QApplication.instance().quit()  # type: ignore[union-attr]
+
+    def _uninstall_and_quit(self) -> None:
+        """卸载自清理后退出。"""
+        from PyQt6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            self, "卸载确认",
+            "将删除开机自启计划任务并退出，确认卸载？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        from slave.auto_setup import uninstall
+        uninstall()
         self._tray.hide()
         QApplication.instance().quit()  # type: ignore[union-attr]

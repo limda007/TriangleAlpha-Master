@@ -9,9 +9,16 @@ SLAVE_SPEC ?= slave.spec
 PYTHON_SRC ?= src
 TESTS_DIR ?= tests
 
+# VM 部署配置
+VM_HOST ?= administrator@100.117.195.115
+VM_DEPLOY_DIR ?= C:/Users/Administrator/Desktop/TriangleAlphaOOOOO
+VM_BUILD_DIR ?= $(VM_DEPLOY_DIR)/_build
+VM_PYTHON ?= C:\\Python312\\python.exe
+
 .PHONY: help deps sync lint fmt typecheck test check \
 	run run-master run-slave \
 	package package-master package-slave \
+	deploy-slave \
 	clean
 
 deps: ## 安装 uv（未安装时）
@@ -50,6 +57,23 @@ package-master: sync ## 打包主控端
 
 package-slave: sync ## 打包被控端
 	PYTHONPATH=$(PYTHONPATH) $(UV) run pyinstaller --clean --noconfirm $(SLAVE_SPEC)
+
+deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
+	@echo ">>> 上传源码到 VM..."
+	ssh $(VM_HOST) "mkdir $(VM_BUILD_DIR)\\src\\common 2>nul & mkdir $(VM_BUILD_DIR)\\src\\slave\\resource 2>nul & echo OK"
+	scp slave.spec $(VM_HOST):"$(VM_BUILD_DIR)/"
+	scp src/common/__init__.py src/common/protocol.py src/common/models.py $(VM_HOST):"$(VM_BUILD_DIR)/src/common/"
+	scp src/slave/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/slave/"
+	scp -r src/slave/resource/ $(VM_HOST):"$(VM_BUILD_DIR)/src/slave/resource/"
+	@echo ">>> 停止旧进程..."
+	-ssh $(VM_HOST) "taskkill /F /IM TriangleAlpha-Slave.exe 2>nul"
+	@echo ">>> 在 VM 上构建..."
+	ssh $(VM_HOST) "cd $(VM_BUILD_DIR) && $(VM_PYTHON) -m PyInstaller --clean --noconfirm slave.spec"
+	@echo ">>> 部署..."
+	ssh $(VM_HOST) "copy /Y \"$(VM_BUILD_DIR)\\dist\\TriangleAlpha-Slave.exe\" \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\""
+	@echo ">>> 启动..."
+	ssh $(VM_HOST) "schtasks /Create /TN StartSlave /TR \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\" /SC ONCE /ST 00:00 /F && schtasks /Run /TN StartSlave && schtasks /Delete /TN StartSlave /F"
+	@echo ">>> 部署完成！"
 
 clean: ## 清理构建与缓存目录
 	rm -rf build dist .ruff_cache .mypy_cache .pytest_cache
