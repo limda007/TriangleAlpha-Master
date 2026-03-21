@@ -11,6 +11,9 @@ build/
 *.egg-info/
 .venv/
 accounts.db
+accounts.db-shm
+accounts.db-wal
 finished_accounts.txt
 src/slave/slave_status.json
 src/slave/runtime_status.json
+*.spec.bak
