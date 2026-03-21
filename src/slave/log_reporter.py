@@ -6,6 +6,7 @@ import contextlib
 import functools
 import queue as thread_queue
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import IO
@@ -144,6 +145,8 @@ class _TeeWriter:
         self._machine_name = machine_name
         # C5: 直接作为实例属性，避免 @property 覆盖父类可写属性
         self.encoding: str = getattr(original, "encoding", "utf-8") or "utf-8"
+        self._drop_count: int = 0
+        self._drop_lock = threading.Lock()
 
     def write(self, text: str) -> int:
         if self._original is not None:
@@ -161,9 +164,23 @@ class _TeeWriter:
                 level = "WARN"
             msg = f"LOG|{self._machine_name}|{ts}|{level}|{stripped}"
             # C2: thread_queue.Queue.put_nowait 是线程安全的
-            with contextlib.suppress(thread_queue.Full):
+            try:
                 self._queue.put_nowait(msg)
+            except thread_queue.Full:
+                with self._drop_lock:
+                    self._drop_count += 1
         return len(text)
+
+    @property
+    def drop_count(self) -> int:
+        return self._drop_count
+
+    def reset_drop_count(self) -> int:
+        """返回当前丢弃数并归零（线程安全）。"""
+        with self._drop_lock:
+            count = self._drop_count
+            self._drop_count = 0
+            return count
 
     def flush(self) -> None:
         if self._original is not None:
