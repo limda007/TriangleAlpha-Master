@@ -48,6 +48,115 @@ class TestSlaveStateStore:
         assert snapshot.elapsed == "360"
 
 
+    def test_load_runtime_status_supports_jinbi_key_alias(self, tmp_path: Path):
+        """runtime_status.json 中 jinbi（无下划线）也能被正确解析。"""
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "runtime_status.json").write_text(
+            json.dumps({"state": GameState.RUNNING, "level": 5, "jinbi": "6688", "current_account": "u1"}),
+            encoding="utf-8",
+        )
+        snapshot = store.load_runtime_status()
+        assert snapshot.jin_bi == "6688"
+
+    def test_load_active_account_supports_JinBi_key(self, tmp_path: Path):
+        """accounts.json 中 JinBi（无 Current 前缀）也能被解析。"""
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "u1", "CurrentLevel": 10, "JinBi": "7777", "IsActive": True}]),
+            encoding="utf-8",
+        )
+        result = store.load_active_account(default_elapsed="0")
+        assert result is not None
+        assert result.jin_bi == "7777"
+
+    def test_load_all_game_accounts_supports_JinBi_key(self, tmp_path: Path):
+        """load_all_game_accounts 也支持 JinBi 别名。"""
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "u1", "Password": "p1", "CurrentLevel": 5, "JinBi": "3333", "IsBanned": False, "IsActive": True}]),
+            encoding="utf-8",
+        )
+        result = store.load_all_game_accounts()
+        assert len(result) == 1
+        assert result[0]["jin_bi"] == "3333"
+
+    def test_load_active_account_from_accounts_json(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps(
+                [
+                    {"Username": "111", "CurrentLevel": 18, "CurrentJinBi": "50000", "IsActive": False},
+                    {"Username": "222", "CurrentLevel": 5, "CurrentJinBi": "1200", "IsActive": True},
+                    {"Username": "333", "CurrentLevel": 10, "CurrentJinBi": "800", "IsActive": False},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        result = store.load_active_account(default_elapsed="60")
+        assert result is not None
+        assert result.current_account == "222"
+        assert result.level == 5
+        assert result.jin_bi == "1200"
+        assert result.elapsed == "60"
+
+    def test_load_active_account_returns_none_when_no_active(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "111", "IsActive": False}]),
+            encoding="utf-8",
+        )
+        assert store.load_active_account() is None
+
+    def test_load_active_account_returns_none_when_file_missing(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        assert store.load_active_account() is None
+
+    def test_load_all_game_accounts(self, tmp_path: Path):
+        """全量账号读取 → 统一格式映射"""
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "Username": "user1", "Password": "p1",
+                        "BindEmail": "e1@test.com", "BindEmailPassword": "ep1",
+                        "CurrentLevel": 18, "CurrentJinBi": "50000",
+                        "IsBanned": False, "IsActive": True,
+                    },
+                    {
+                        "Username": "user2", "Password": "p2",
+                        "CurrentLevel": 3, "CurrentJinBi": "100",
+                        "IsBanned": True, "IsActive": False,
+                    },
+                    {
+                        "Username": "", "Password": "empty",
+                        "CurrentLevel": 0, "CurrentJinBi": "0",
+                        "IsBanned": False, "IsActive": False,
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        result = store.load_all_game_accounts()
+        assert len(result) == 2  # 空 username 被过滤
+        assert result[0]["username"] == "user1"
+        assert result[0]["password"] == "p1"
+        assert result[0]["bind_email"] == "e1@test.com"
+        assert result[0]["level"] == 18
+        assert result[0]["jin_bi"] == "50000"
+        assert result[0]["is_banned"] is False
+        assert result[0]["is_active"] is True
+        assert result[1]["username"] == "user2"
+        assert result[1]["is_banned"] is True
+
+    def test_load_all_game_accounts_missing_file(self, tmp_path: Path):
+        """文件不存在时返回空列表"""
+        store = SlaveStateStore(tmp_path)
+        assert store.load_all_game_accounts() == []
+
+
 class TestSlaveBackendStatusSnapshot:
     def test_runtime_snapshot_falls_back_to_running_state(self, tmp_path: Path):
         backend = SlaveBackend(tmp_path, None)
@@ -71,3 +180,126 @@ class TestSlaveBackendStatusSnapshot:
         assert snapshot.jin_bi == "88"
         assert snapshot.current_account == "user-a"
         assert int(snapshot.elapsed) >= 10
+
+    def test_runtime_snapshot_falls_back_to_accounts_json(self, tmp_path: Path):
+        """runtime_status.json 不存在时，从 accounts.json 读取活跃账号。"""
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 30
+        (tmp_path / "accounts.json").write_text(
+            json.dumps(
+                [
+                    {"Username": "idle-acc", "CurrentLevel": 18, "CurrentJinBi": "50000", "IsActive": False},
+                    {"Username": "active-acc", "CurrentLevel": 7, "CurrentJinBi": "3500", "IsActive": True},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = backend._load_runtime_snapshot()
+        assert snapshot.state == GameState.RUNNING
+        assert snapshot.current_account == "active-acc"
+        assert snapshot.level == 7
+        assert snapshot.jin_bi == "3500"
+        assert int(snapshot.elapsed) >= 28
+
+
+class TestMapIpcStatus:
+    """IPC status_text → GameState 映射。"""
+
+    def test_running_status(self):
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("运行中") == GameState.RUNNING
+
+    def test_completed_status(self):
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("已完成") == GameState.COMPLETED
+        assert SlaveBackend._map_ipc_status("完成过关") == GameState.COMPLETED
+
+    def test_stopped_status(self):
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("脚本已停止") == GameState.SCRIPT_STOPPED
+        assert SlaveBackend._map_ipc_status("已退出") == GameState.SCRIPT_STOPPED
+
+    def test_empty_defaults_to_running(self):
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("") == GameState.RUNNING
+
+    def test_unknown_text_defaults_to_running(self):
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("过关中") == GameState.RUNNING
+        assert SlaveBackend._map_ipc_status("等待指令") == GameState.RUNNING
+
+
+class TestIpcPriorityInSnapshot:
+    """_load_runtime_snapshot 中 IPC 优先级测试。"""
+
+    def test_ipc_data_takes_priority_over_file(self, tmp_path: Path):
+        """IPC 有效时忽略文件。"""
+        from slave.backend import SlaveBackend
+        from slave.ipc_receiver import LocalIpcReceiver
+
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 30
+
+        (tmp_path / "runtime_status.json").write_text(
+            json.dumps({"state": GameState.RUNNING, "level": 1, "jin_bi": "10",
+                         "current_account": "file-acc", "elapsed": "5"}),
+            encoding="utf-8",
+        )
+
+        backend._ipc = LocalIpcReceiver()
+        backend._ipc._on_message({
+            "account": "ipc-acc", "level": "20",
+            "jinbi": "9999", "status_text": "运行中", "elapsed": "100",
+        })
+
+        snapshot = backend._load_runtime_snapshot()
+        assert snapshot.current_account == "ipc-acc"
+        assert snapshot.level == 20
+        assert snapshot.jin_bi == "9999"
+        assert snapshot.elapsed == "100"
+
+    def test_stale_ipc_falls_back_to_file(self, tmp_path: Path):
+        """IPC 过期（>15s）时回退到文件。"""
+        from slave.backend import SlaveBackend
+        from slave.ipc_receiver import LocalIpcReceiver
+
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 30
+
+        (tmp_path / "runtime_status.json").write_text(
+            json.dumps({"state": GameState.RUNNING, "level": 5, "jin_bi": "200",
+                         "current_account": "file-acc", "elapsed": "50"}),
+            encoding="utf-8",
+        )
+
+        backend._ipc = LocalIpcReceiver()
+        backend._ipc._data = {
+            "account": "old-ipc", "level": "10",
+            "jinbi": "500", "status_text": "运行中", "elapsed": "30",
+        }
+        backend._ipc._last_sync = time.monotonic() - 20  # 过期 20s
+
+        snapshot = backend._load_runtime_snapshot()
+        assert snapshot.current_account == "file-acc"
+        assert snapshot.level == 5
+
+    def test_no_ipc_uses_file(self, tmp_path: Path):
+        """无 IPC 数据时正常使用文件。"""
+        from slave.backend import SlaveBackend
+        from slave.ipc_receiver import LocalIpcReceiver
+
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 10
+
+        (tmp_path / "runtime_status.json").write_text(
+            json.dumps({"state": GameState.RUNNING, "level": 8, "jin_bi": "600",
+                         "current_account": "file-only"}),
+            encoding="utf-8",
+        )
+
+        backend._ipc = LocalIpcReceiver()
+
+        snapshot = backend._load_runtime_snapshot()
+        assert snapshot.current_account == "file-only"

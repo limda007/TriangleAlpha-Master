@@ -70,6 +70,12 @@ class MainWindow(FluentWindow):
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
         self.nodeManager.node_status_reported.connect(self._syncAccountFromNode)
 
+        # slave ACCOUNT_SYNC → 批量 upsert 账号到 AccountDB
+        self.nodeManager.account_sync_received.connect(self._onAccountSync)
+
+        # TestDemo NEED_ACCOUNT → 自动分配空闲账号
+        self.nodeManager.need_account.connect(self._onNeedAccount)
+
     def _initNavigation(self):
         self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
         self.navigationInterface.addSeparator()
@@ -81,7 +87,7 @@ class MainWindow(FluentWindow):
         )
 
     def _initWindow(self):
-        self.resize(1200, 800)
+        self.resize(1600, 800)
         self.setMinimumWidth(900)
         self.setWindowTitle("TriangleAlpha 群控中心")
 
@@ -137,4 +143,32 @@ class MainWindow(FluentWindow):
             return
         self.accountPool.update_from_status(
             machine_name, node.level, node.jin_bi, node.game_state,
+            current_account=node.current_account,
         )
+
+    def _onAccountSync(self, machine_name: str, accounts: object) -> None:
+        """slave ACCOUNT_SYNC → 批量 upsert 账号"""
+        if not isinstance(accounts, list):
+            return
+        node = self.nodeManager.nodes.get(machine_name)
+        threshold = int(node.level_threshold) if node and node.level_threshold.isdigit() else 0
+        self.accountPool.upsert_from_sync(machine_name, accounts, level_threshold=threshold)
+
+    def _onNeedAccount(self, machine_name: str) -> None:
+        """TestDemo NEED_ACCOUNT → 自动分配账号并下发。
+
+        优先重发该机器已绑定的未完成账号（accounts.json 被删等情况），
+        无绑定账号时从池中分配新的空闲账号。
+        """
+        node = self.nodeManager.nodes.get(machine_name)
+        if not node:
+            return
+        existing = self.accountPool.get_account_for_machine(machine_name)
+        if existing:
+            # 该机器有未完成账号 → 重新下发，让 TestDemo 继续跑
+            self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, existing.to_line())
+            return
+        acc = self.accountPool.allocate(machine_name)
+        if acc is None:
+            return
+        self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())

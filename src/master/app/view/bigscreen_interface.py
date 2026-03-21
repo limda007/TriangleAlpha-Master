@@ -354,9 +354,10 @@ class BigScreenInterface(ScrollArea):
         self.accountTable.setAlternatingRowColors(True)
         self.accountTable.verticalHeader().hide()
         header = self.accountTable.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col in range(1, len(_POOL_HEADERS)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setMinimumSectionSize(60)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(False)
+        self.accountTable.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.accountTable.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -436,6 +437,7 @@ class BigScreenInterface(ScrollArea):
             ("提取合格出货", FIF.COMPLETED, "btnExport"),
             ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
             ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
+            ("清理单机账号", FIF.REMOVE, "btnCleanAccounts"),
             ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
         ]
         for text, icon, obj_name in _FILE_BUTTONS:
@@ -463,7 +465,7 @@ class BigScreenInterface(ScrollArea):
         self._actionStack.setCurrentWidget(opPage)
         self._actionPivot.setCurrentItem("opPage")
 
-        # 连接按钮信号（操作: 0-3, 文件: 4-7）
+        # 连接按钮信号（操作: 0-3, 文件: 4-8）
         self._actionBtns[0].clicked.connect(self._oneClickStart)
         self._actionBtns[1].clicked.connect(self._startExeOnAll)
         self._actionBtns[2].clicked.connect(self._stopExeOnAll)
@@ -471,7 +473,8 @@ class BigScreenInterface(ScrollArea):
         self._actionBtns[4].clicked.connect(self._exportQualified)
         self._actionBtns[5].clicked.connect(self._sendFileToAll)
         self._actionBtns[6].clicked.connect(self._deleteFileOnAll)
-        self._actionBtns[7].clicked.connect(self._distributeKey)
+        self._actionBtns[7].clicked.connect(self._cleanStandaloneAccounts)
+        self._actionBtns[8].clicked.connect(self._distributeKey)
 
         return panel
 
@@ -520,9 +523,9 @@ class BigScreenInterface(ScrollArea):
         card.addGroup(FIF.FLAG, "下号等级", "达标后自动换号", self._cfgLevel)
 
         self._cfgLoot = SpinBox(cfgPage)
-        self._cfgLoot.setRange(0, 30)
+        self._cfgLoot.setRange(0, 999)
         self._cfgLoot.setValue(_DEFAULT_LOOT)
-        self._cfgLoot.setFixedWidth(120)
+        self._cfgLoot.setFixedWidth(160)
         group = card.addGroup(FIF.SHOPPING_CART, "舔包次数", "每局舔包上限", self._cfgLoot)
         group.setSeparatorVisible(True)
 
@@ -987,6 +990,29 @@ class BigScreenInterface(ScrollArea):
         self._nm.add_history("批量删除文件", scope, detail=", ".join(filenames))
         InfoBar.success(
             "已发送", f"删除指令已发送到 {scope}",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _cleanStandaloneAccounts(self) -> None:
+        """清理单机账号：删除 accounts.txt.imported 和 accounts.json"""
+        ips, selected = self._getTargetIPs()
+        if not ips:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
+        if not self._confirmDangerous(
+            "清理单机账号",
+            f"即将删除 {scope} 的 accounts.json 和 accounts.txt.imported，此操作不可恢复",
+        ):
+            return
+        payload = "accounts.txt.imported|accounts.json"
+        self._tcp.broadcast(ips, TcpCommand.DELETE_FILE, payload)
+        self._nm.add_history("清理单机账号", scope)
+        InfoBar.success(
+            "已清理", f"清理指令已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 

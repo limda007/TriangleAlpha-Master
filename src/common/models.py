@@ -11,6 +11,7 @@ class AccountStatus(enum.Enum):
     IN_USE = "运行中"
     COMPLETED = "已完成"
     FETCHED = "已取号"
+    BANNED = "已封禁"
 
 
 @dataclass

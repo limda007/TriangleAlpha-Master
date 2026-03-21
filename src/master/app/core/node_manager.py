@@ -1,6 +1,8 @@
 """节点状态管理器：处理 UDP 消息，维护节点列表"""
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -19,6 +21,8 @@ class NodeManager(QObject):
     node_online = pyqtSignal(str)    # machine_name — 新节点上线
     node_offline = pyqtSignal(str)   # machine_name — 节点离线
     node_status_reported = pyqtSignal(str)  # machine_name — 仅 STATUS 消息触发
+    account_sync_received = pyqtSignal(str, object)  # (machine_name, list[dict]) — 账号同步
+    need_account = pyqtSignal(str)  # machine_name — TestDemo 请求新账号
     stats_changed = pyqtSignal()     # 统计数据变化
     history_changed = pyqtSignal()   # 操作历史变化 (M1)
 
@@ -49,6 +53,10 @@ class NodeManager(QObject):
                 self._handle_offline(msg, remote_ip)
             case UdpMessageType.STATUS:
                 self._handle_status(msg, remote_ip)
+            case UdpMessageType.ACCOUNT_SYNC:
+                self._handle_account_sync(msg)
+            case UdpMessageType.NEED_ACCOUNT:
+                self.need_account.emit(msg.machine_name)
 
     def check_timeouts(self) -> None:
         """检查超时节点，标记离线 / 断连"""
@@ -188,13 +196,17 @@ class NodeManager(QObject):
 
     def _handle_status(self, msg: UdpMessage, remote_ip: str) -> None:
         name = msg.machine_name
+        # TestDemo 直发的 STATUS 格式与 Python slave 不同（字段错位），
+        # 表现为 state 是纯数字（实为账号号码），标准化后为空 → 丢弃
+        state = GameState.normalize(msg.state)
+        if msg.state and not state:
+            return
         if name not in self.nodes:
             # 收到状态消息但节点不存在，先创建
             self.nodes[name] = NodeInfo(machine_name=name, ip=remote_ip)
             self.node_online.emit(name)
         node = self.nodes[name]
         # 写入 game_state 而非 status（status 由心跳和超时管理）
-        state = GameState.normalize(msg.state)
         if state == GameState.SCRIPT_STOPPED:
             node.game_state = ""
             node.current_account = ""
@@ -218,3 +230,15 @@ class NodeManager(QObject):
         self.node_status_reported.emit(name)
         self._recalc_online()
         self._schedule_stats()
+
+    def _handle_account_sync(self, msg: UdpMessage) -> None:
+        """解码 ACCOUNT_SYNC 消息并发射信号给 AccountDB。"""
+        if not msg.sync_payload:
+            return
+        try:
+            raw = base64.b64decode(msg.sync_payload).decode("utf-8")
+            accounts = json.loads(raw)
+        except Exception:
+            return
+        if isinstance(accounts, list):
+            self.account_sync_received.emit(msg.machine_name, accounts)

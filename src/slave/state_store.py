@@ -65,10 +65,61 @@ class SlaveStateStore:
         return RuntimeStatus(
             state=self._as_text(data.get("state"), GameState.RUNNING),
             level=self._as_int(data.get("level"), 0),
-            jin_bi=self._as_text(data.get("jin_bi"), "0"),
+            jin_bi=self._as_text(
+                data.get("jin_bi") or data.get("jinbi") or data.get("JinBi") or data.get("CurrentJinBi"),
+                "0",
+            ),
             current_account=current_account,
             elapsed=self._as_text(data.get("elapsed"), default_elapsed),
         )
+
+    def load_active_account(self, default_elapsed: str = "0") -> RuntimeStatus | None:
+        """从 TestDemo 的 accounts.json 读取当前活跃账号信息。"""
+        data = self._read_json(self._base_dir / "accounts.json")
+        if not isinstance(data, list):
+            return None
+        for acc in data:
+            if not isinstance(acc, dict):
+                continue
+            if acc.get("IsActive"):
+                return RuntimeStatus(
+                    state=GameState.RUNNING,
+                    level=self._as_int(acc.get("CurrentLevel"), 0),
+                    jin_bi=self._as_text(
+                        acc.get("CurrentJinBi") or acc.get("JinBi") or acc.get("jinbi"),
+                        "0",
+                    ),
+                    current_account=self._as_text(acc.get("Username"), ""),
+                    elapsed=default_elapsed,
+                )
+        return None
+
+    def load_all_game_accounts(self) -> list[dict[str, object]]:
+        """读取 TestDemo 的 accounts.json 全量账号列表，映射为统一格式。"""
+        data = self._read_json(self._base_dir / "accounts.json")
+        if not isinstance(data, list):
+            return []
+        result: list[dict[str, object]] = []
+        for acc in data:
+            if not isinstance(acc, dict):
+                continue
+            username = self._as_text(acc.get("Username"), "")
+            if not username:
+                continue
+            result.append({
+                "username": username,
+                "password": self._as_text(acc.get("Password"), ""),
+                "bind_email": self._as_text(acc.get("BindEmail"), ""),
+                "bind_email_pwd": self._as_text(acc.get("BindEmailPassword"), ""),
+                "level": self._as_int(acc.get("CurrentLevel"), 0),
+                "jin_bi": self._as_text(
+                    acc.get("CurrentJinBi") or acc.get("JinBi") or acc.get("jinbi"),
+                    "0",
+                ),
+                "is_banned": bool(acc.get("IsBanned")),
+                "is_active": bool(acc.get("IsActive")),
+            })
+        return result
 
     def clear_runtime_status(self) -> None:
         try:

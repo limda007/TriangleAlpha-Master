@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     bind_email_pwd   TEXT    NOT NULL DEFAULT '',
     notes            TEXT    NOT NULL DEFAULT '',
     status           TEXT    NOT NULL DEFAULT '空闲中'
-                     CHECK (status IN ('空闲中', '运行中', '已完成', '已取号')),
+                     CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
     assigned_machine TEXT    NOT NULL DEFAULT '',
     level            INTEGER NOT NULL DEFAULT 0,
     jin_bi           TEXT    NOT NULL DEFAULT '0',
@@ -48,7 +48,7 @@ _LEGACY_STATUS_MAP = {
     "完成": "已完成",
     "取号": "已取号",
 }
-_EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'")
+_EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'", "'已封禁'")
 
 
 class AccountDB(QObject):
@@ -196,13 +196,24 @@ class AccountDB(QObject):
 
     def update_from_status(
         self, machine_name: str, level: int, jin_bi: str, state: str,
+        *, current_account: str = "",
     ) -> None:
-        """slave STATUS 上报 → 更新绑定账号的等级/金币，已完成则自动流转"""
+        """slave STATUS 上报 → 更新绑定账号的等级/金币，已完成则自动流转。
+
+        若 assigned_machine 找不到对应账号但 current_account 匹配，自动绑定。
+        """
         changed = self._conn.execute(
             "UPDATE accounts SET level=?, jin_bi=? "
             "WHERE status='运行中' AND assigned_machine=?",
             (level, jin_bi, machine_name),
         ).rowcount
+        if not changed and current_account:
+            # 账号未经 allocate，但 TestDemo 已在使用 → 自动绑定
+            changed = self._conn.execute(
+                "UPDATE accounts SET level=?, jin_bi=?, status='运行中', assigned_machine=? "
+                "WHERE username=? AND status IN ('空闲中', '运行中')",
+                (level, jin_bi, machine_name, current_account),
+            ).rowcount
         if not changed:
             return
         if state == "已完成":
@@ -215,6 +226,105 @@ class AccountDB(QObject):
         self._conn.commit()
         self._refresh_counts()
         self.pool_changed.emit()
+
+    def upsert_from_sync(
+        self, machine_name: str, accounts: list[dict[str, object]],
+        *, level_threshold: int = 0,
+    ) -> tuple[int, int]:
+        """从 slave 的 accounts.json 同步账号：不存在则新增，存在则更新。
+
+        Args:
+            level_threshold: 下号等级阈值，level >= threshold 且非活跃视为已完成。
+                             0 表示未配置，不做完成判断。
+
+        Returns:
+            (inserted, updated) 元组
+        """
+        inserted = updated = 0
+        for acc in accounts:
+            username = str(acc.get("username", "")).strip()
+            if not username:
+                continue
+            is_banned = bool(acc.get("is_banned"))
+            is_active = bool(acc.get("is_active"))
+            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
+            jin_bi = str(acc.get("jin_bi", "0"))
+            is_completed = (
+                not is_active
+                and not is_banned
+                and level_threshold > 0
+                and level >= level_threshold
+            )
+
+            existing = self._conn.execute(
+                "SELECT id, status, level, jin_bi FROM accounts WHERE username = ?", (username,),
+            ).fetchone()
+
+            if existing is None:
+                if is_banned:
+                    status = "已封禁"
+                elif is_completed:
+                    status = "已完成"
+                elif is_active:
+                    status = "运行中"
+                else:
+                    status = "空闲中"
+                assigned = machine_name if is_active else ""
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_completed else None
+                self._conn.execute(
+                    "INSERT INTO accounts "
+                    "(username, password, bind_email, bind_email_pwd, status, "
+                    " assigned_machine, level, jin_bi, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (username, str(acc.get("password", "")),
+                     str(acc.get("bind_email", "")),
+                     str(acc.get("bind_email_pwd", "")),
+                     status, assigned, level, jin_bi, now),
+                )
+                inserted += 1
+            else:
+                # 运行中账号的 level/jin_bi 由 STATUS 实时更新，
+                # ACCOUNT_SYNC 不覆盖，避免实时值和静态值交替闪烁
+                is_running = existing["status"] == "运行中"
+                if is_running:
+                    parts: list[str] = []
+                    params: list[object] = []
+                else:
+                    parts = ["level = ?", "jin_bi = ?"]
+                    params = [level, jin_bi]
+                if is_banned and existing["status"] != "已封禁":
+                    parts.append("status = '已封禁'")
+                elif is_active and existing["status"] != "运行中":
+                    # IsActive=true → 恢复为运行中（可能从已完成/空闲中重新开始）
+                    parts.extend([
+                        "status = '运行中'", "assigned_machine = ?",
+                        "completed_at = NULL",
+                    ])
+                    params.append(machine_name)
+                elif is_completed and existing["status"] in ("空闲中", "运行中"):
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    if not is_running:
+                        parts.extend(["status = '已完成'", "completed_at = ?"])
+                        params.append(now)
+                    else:
+                        # 运行中 → 已完成，同时写入最终 level/jin_bi
+                        parts.extend([
+                            "level = ?", "jin_bi = ?",
+                            "status = '已完成'", "completed_at = ?",
+                        ])
+                        params.extend([level, jin_bi, now])
+                if parts:
+                    self._conn.execute(
+                        f"UPDATE accounts SET {', '.join(parts)} WHERE id = ?",
+                        (*params, existing["id"]),
+                    )
+                updated += 1
+
+        if inserted or updated:
+            self._conn.commit()
+            self._refresh_counts()
+            self.pool_changed.emit()
+        return inserted, updated
 
     # ── 查询 ───────────────────────────────────────────────
 
@@ -321,7 +431,7 @@ class AccountDB(QObject):
                 bind_email_pwd   TEXT    NOT NULL DEFAULT '',
                 notes            TEXT    NOT NULL DEFAULT '',
                 status           TEXT    NOT NULL DEFAULT '空闲中'
-                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号')),
+                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
                 assigned_machine TEXT    NOT NULL DEFAULT '',
                 level            INTEGER NOT NULL DEFAULT 0,
                 jin_bi           TEXT    NOT NULL DEFAULT '0',

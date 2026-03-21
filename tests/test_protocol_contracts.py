@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import base64
+import json
 
 from common.protocol import (
     TcpCommand,
+    UdpMessageType,
     build_tcp_command,
+    build_udp_account_sync,
     build_udp_ext_online,
     parse_tcp_command,
     parse_udp_message,
@@ -65,3 +68,29 @@ class TestUdpProtocolContracts:
         assert parsed.teammate_fill == "1"
         assert parsed.weapon_config == "AK74"
         assert parsed.level_threshold == "18"
+
+    def test_account_sync_roundtrip(self):
+        """ACCOUNT_SYNC 消息构建→解析往返测试"""
+        accounts = [
+            {"username": "u1", "level": 18, "jin_bi": "5000", "is_banned": False},
+            {"username": "u2", "level": 5, "jin_bi": "100", "is_banned": True},
+        ]
+        payload = json.dumps(accounts, ensure_ascii=False, separators=(",", ":"))
+        payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
+        raw = build_udp_account_sync("VM-01", payload_b64)
+        parsed = parse_udp_message(raw)
+        assert parsed is not None
+        assert parsed.type == UdpMessageType.ACCOUNT_SYNC
+        assert parsed.machine_name == "VM-01"
+        # 解码 payload 验证数据完整性
+        decoded = json.loads(base64.b64decode(parsed.sync_payload).decode("utf-8"))
+        assert len(decoded) == 2
+        assert decoded[0]["username"] == "u1"
+        assert decoded[1]["is_banned"] is True
+
+    def test_account_sync_empty_payload(self):
+        raw = "ACCOUNT_SYNC|VM-01|"
+        parsed = parse_udp_message(raw)
+        # 空 payload 应能解析但 sync_payload 为空
+        assert parsed is not None
+        assert parsed.sync_payload == ""

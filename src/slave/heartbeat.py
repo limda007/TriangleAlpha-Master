@@ -10,7 +10,14 @@ from pathlib import Path
 
 import psutil
 
-from common.protocol import HEARTBEAT_INTERVAL, UDP_PORT, build_udp_ext_online, build_udp_offline, build_udp_status
+from common.protocol import (
+    HEARTBEAT_INTERVAL,
+    UDP_PORT,
+    build_udp_account_sync,
+    build_udp_ext_online,
+    build_udp_offline,
+    build_udp_status,
+)
 from slave.logging_utils import get_logger
 
 SLAVE_VERSION = "2.0.0"
@@ -55,6 +62,15 @@ class HeartbeatService:
                     elapsed: str = "0") -> None:
         """发送 STATUS 消息到 master（独立阻塞 UDP socket，不复用心跳 async socket）"""
         msg = build_udp_status(self._machine_name, state, level, jin_bi, desc, elapsed)
+        self._send_udp(msg)
+
+    def send_account_sync(self, payload_b64: str) -> None:
+        """发送 ACCOUNT_SYNC 消息到 master。"""
+        msg = build_udp_account_sync(self._machine_name, payload_b64)
+        self._send_udp(msg)
+
+    def _send_udp(self, msg: str) -> None:
+        """通用 UDP 发送（独立阻塞 socket）。"""
         data = msg.encode("utf-8")
         target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:

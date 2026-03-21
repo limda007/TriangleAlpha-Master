@@ -9,6 +9,8 @@ UDP_PORT = 8888
 TCP_CMD_PORT = 9999
 TCP_LOG_PORT = 8890
 HEARTBEAT_INTERVAL = 3
+LOCAL_IPC_PORT = 8889       # TestDemo → slave 本地 IPC 端口
+IPC_TIMEOUT = 15            # IPC 数据过期阈值（秒）
 OFFLINE_TIMEOUT = 15
 DISCONNECT_TIMEOUT = 60
 TCP_SEND_TIMEOUT = 10
@@ -19,6 +21,8 @@ class UdpMessageType(enum.Enum):
     OFFLINE = "OFFLINE"
     STATUS = "STATUS"
     EXT_ONLINE = "EXT_ONLINE"
+    ACCOUNT_SYNC = "ACCOUNT_SYNC"
+    NEED_ACCOUNT = "NEED_ACCOUNT"
 
 
 class GameState:
@@ -67,6 +71,7 @@ class UdpMessage:
     weapon_config: str = ""
     level_threshold: str = ""
     loot_count: str = ""
+    sync_payload: str = ""  # ACCOUNT_SYNC: base64 编码的 JSON 账号数组
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -102,6 +107,17 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 level_threshold=parts[9] if len(parts) >= 10 else "",
                 loot_count=parts[10] if len(parts) >= 11 else "",
             )
+        case "ACCOUNT_SYNC" if len(parts) >= 3:
+            return UdpMessage(
+                type=UdpMessageType.ACCOUNT_SYNC,
+                machine_name=parts[1],
+                sync_payload=parts[2],
+            )
+        case "NEED_ACCOUNT" if len(parts) >= 2:
+            return UdpMessage(
+                type=UdpMessageType.NEED_ACCOUNT,
+                machine_name=parts[1],
+            )
     return None
 
 
@@ -127,6 +143,10 @@ def build_udp_offline(machine_name: str) -> str:
 
 def build_udp_status(machine_name: str, state: str, level: int, jin_bi: str, desc: str, elapsed: str = "0") -> str:
     return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}|{elapsed}"
+
+
+def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:
+    return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}"
 
 
 class TcpCommand(enum.Enum):
