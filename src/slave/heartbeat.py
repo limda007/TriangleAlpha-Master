@@ -20,7 +20,25 @@ from common.protocol import (
 )
 from slave.logging_utils import get_logger
 
-SLAVE_VERSION = "2.0.0"
+
+def _read_version() -> str:
+    """从 pyproject.toml 读取版本号，PyInstaller 打包后从冻结元数据读取。"""
+    if getattr(__import__("sys"), "frozen", False):
+        try:
+            from importlib.metadata import version
+            return version("triangle-alpha-master")
+        except Exception:
+            pass
+    # 开发环境：直接解析 pyproject.toml
+    toml_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    if toml_path.exists():
+        for line in toml_path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return "0.0.0"
+
+
+SLAVE_VERSION = _read_version()
 logger = get_logger(__name__)
 
 
