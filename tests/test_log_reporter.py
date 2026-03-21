@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import queue as thread_queue
+import sys
 
 from slave.log_reporter import _TeeWriter
 
@@ -53,3 +54,56 @@ class TestTeeWriterDropCount:
         for t in threads:
             t.join()
         assert writer.drop_count == 1000  # 10 线程 × 100 次
+
+
+class TestStderrCapture:
+    """install() 应同时拦截 stdout 和 stderr。"""
+
+    def test_install_replaces_stderr(self):
+        from slave.log_reporter import LogReporter
+        original_stderr = sys.stderr
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            assert sys.stderr is not original_stderr
+            assert isinstance(sys.stderr, _TeeWriter)
+        finally:
+            reporter._restore_streams()
+
+    def test_stderr_output_enters_queue_as_error(self):
+        from slave.log_reporter import LogReporter
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            sys.stderr.write("something broke\n")
+            msg = reporter._queue.get_nowait()
+            assert "something broke" in msg
+            assert "|ERROR|" in msg  # stderr 输出默认标记为 ERROR
+        finally:
+            reporter._restore_streams()
+
+    def test_stderr_warn_keyword_stays_error(self):
+        """stderr 中含 WARN 关键字时，级别仍应为 ERROR（is_stderr 是下限）。"""
+        from slave.log_reporter import LogReporter
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            sys.stderr.write("WARNING: deprecation\n")
+            msg = reporter._queue.get_nowait()
+            assert "|ERROR|" in msg  # stderr 下限为 ERROR，不被 WARN 降级
+        finally:
+            reporter._restore_streams()
+
+    def test_stop_restores_stderr(self):
+        import asyncio  # noqa: E402
+
+        from slave.log_reporter import LogReporter
+        original_stderr = sys.stderr
+        reporter = LogReporter("127.0.0.1", "VM-01")
+        reporter.install()
+        try:
+            asyncio.run(reporter.stop())
+            assert sys.stderr is original_stderr
+        finally:
+            # 兜底恢复，防止断言失败时污染后续测试
+            reporter._restore_streams()

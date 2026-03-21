@@ -26,15 +26,18 @@ class LogReporter:
         self._queue: thread_queue.Queue[str] = thread_queue.Queue(maxsize=1000)
         self._running = False
         self._original_stdout: IO[str] | None = None
+        self._original_stderr: IO[str] | None = None
         # P0: 专用单线程池，不占用默认线程池
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log-reporter")
         # P1: 持久化 TCP 连接
         self._writer: asyncio.StreamWriter | None = None
 
     def install(self) -> None:
-        """安装 stdout 拦截器（兼容 console=False 时 stdout=None）"""
+        """安装 stdout/stderr 拦截器"""
         self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
         sys.stdout = _TeeWriter(self._original_stdout, self._queue, self._machine_name)  # type: ignore[assignment]
+        sys.stderr = _TeeWriter(self._original_stderr, self._queue, self._machine_name, is_stderr=True)  # type: ignore[assignment]
 
     async def run(self) -> None:
         """消费队列，批量发送日志到中控"""
@@ -107,10 +110,16 @@ class LogReporter:
                     await asyncio.sleep(2 ** (attempt + 1))
         # M5: 重试耗尽，丢弃日志
 
-    async def stop(self) -> None:
-        self._running = False
+    def _restore_streams(self) -> None:
+        """恢复原始 stdout/stderr。"""
         if self._original_stdout is not None:
             sys.stdout = self._original_stdout
+        if self._original_stderr is not None:
+            sys.stderr = self._original_stderr
+
+    async def stop(self) -> None:
+        self._running = False
+        self._restore_streams()
         while not self._queue.empty():
             lines: list[str] = []
             while not self._queue.empty() and len(lines) < 50:
@@ -139,11 +148,15 @@ class _TeeWriter:
     sys.stdout 赋值处已有 type: ignore[assignment]。
     """
 
-    def __init__(self, original: IO[str] | None, q: thread_queue.Queue[str], machine_name: str):
+    def __init__(
+        self, original: IO[str] | None, q: thread_queue.Queue[str],
+        machine_name: str, *, is_stderr: bool = False,
+    ):
         self._original = original
         self._queue = q
         self._machine_name = machine_name
         # C5: 直接作为实例属性，避免 @property 覆盖父类可写属性
+        self._is_stderr = is_stderr
         self.encoding: str = getattr(original, "encoding", "utf-8") or "utf-8"
         self._drop_count: int = 0
         self._drop_lock = threading.Lock()
@@ -162,6 +175,9 @@ class _TeeWriter:
                 level = "ERROR"
             elif "[警告]" in stripped or "WARN" in stripped:
                 level = "WARN"
+            # stderr 输出的级别下限为 ERROR（不被 WARN 关键字降级）
+            if self._is_stderr and level != "ERROR":
+                level = "ERROR"
             msg = f"LOG|{self._machine_name}|{ts}|{level}|{stripped}"
             # C2: thread_queue.Queue.put_nowait 是线程安全的
             try:
