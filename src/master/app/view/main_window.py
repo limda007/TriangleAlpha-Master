@@ -68,6 +68,10 @@ class MainWindow(FluentWindow):
         # 节点重连时自动重发绑定账号
         self.nodeManager.node_online.connect(self._onNodeReconnect)
 
+        # 节点上报时自动补全缺失的验证码 Key
+        self._tokenPushedNodes: set[str] = set()
+        self.nodeManager.node_updated.connect(self._autoFixTokenKey)
+
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
         self.nodeManager.node_status_reported.connect(self._syncAccountFromNode)
 
@@ -102,6 +106,7 @@ class MainWindow(FluentWindow):
 
         if sys.platform != "darwin":
             self.navigationInterface.setAcrylicEnabled(True)
+        self.navigationInterface.setExpandWidth(168)
 
         if sys.platform == "darwin":
             self.setMicaEffectEnabled(False)
@@ -181,6 +186,25 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         if node:
             self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+
+    def _autoFixTokenKey(self, machine_name: str) -> None:
+        """节点缺少或 Key 不一致时自动下发正确的验证码 Key"""
+        master_key = self.accountPool.get_config("api_key")
+        if not master_key:
+            return
+        node = self.nodeManager.nodes.get(machine_name)
+        if not node or node.status in ("离线", "断连"):
+            return
+        # Key 一致，从已推送集合中移除（支持 master 换 key 后重新推送）
+        if node.token_key == master_key:
+            self._tokenPushedNodes.discard(machine_name)
+            return
+        # 已经推送过且节点未重启，跳过避免重复推送
+        if machine_name in self._tokenPushedNodes:
+            return
+        # 自动下发
+        self.tcpCommander.send(node.ip, TcpCommand.EXT_SET_CONFIG, f"token.txt|{master_key}")
+        self._tokenPushedNodes.add(machine_name)
 
     def _syncAccountFromNode(self, machine_name: str) -> None:
         """slave STATUS 上报 → 同步等级/金币/状态到 AccountDB"""
