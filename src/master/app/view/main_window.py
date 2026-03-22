@@ -20,6 +20,7 @@ from master.app.core.tcp_commander import TcpCommander
 from master.app.core.udp_listener import UdpListenerThread
 from master.app.view.account_interface import AccountInterface
 from master.app.view.bigscreen_interface import BigScreenInterface
+from master.app.view.help_interface import HelpInterface
 from master.app.view.history_interface import HistoryInterface
 from master.app.view.log_interface import LogInterface
 from master.app.view.setting_interface import SettingInterface
@@ -54,6 +55,7 @@ class MainWindow(FluentWindow):
         self.logInterface = LogInterface(self)
         self.logInterface.set_receiver(self.logReceiver)
         self.settingInterface = SettingInterface(self)
+        self.helpInterface = HelpInterface(self)
 
         self._initWindow()
         self._initNavigation()
@@ -90,6 +92,7 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.accountInterface, FIF.PEOPLE, "账号管理", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.historyInterface, FIF.HISTORY, "操作历史", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.logInterface, FIF.DOCUMENT, "实时日志", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.helpInterface, FIF.HELP, "帮助", NavigationItemPosition.BOTTOM)
         self.addSubInterface(
             self.settingInterface, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM,
         )
