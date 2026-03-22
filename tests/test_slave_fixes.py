@@ -54,21 +54,23 @@ class TestC6ProcessHandle:
         pm = ProcessManager(str(tmp_path))
         assert pm._process is None
 
-    def test_start_saves_process_handle(self, tmp_path):
+    def test_start_launches_independently(self, tmp_path):
+        """start_launcher 用 cmd /c start 独立启动，不保存 process handle"""
         from slave.process_manager import ProcessManager
 
         pm = ProcessManager(str(tmp_path))
         (tmp_path / "TriangleAlpha.Launcher.exe").write_text("fake")
-        mock_proc = MagicMock()
 
         async def run():
             with (
                 patch.object(pm, "kill_by_name", new_callable=AsyncMock, return_value=0),
-                patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc),
+                patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
             ):
                 result = await pm.start_launcher()
                 assert result is True
-                assert pm._process is mock_proc
+                mock_exec.assert_called_once()
+                # cmd /c start 模式不保存 _process
+                assert pm._process is None
 
         asyncio.run(run())
 

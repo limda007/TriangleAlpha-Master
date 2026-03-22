@@ -141,6 +141,9 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         if not node:
             return
+        # 脚本停止时 game_state 被清空，跳过同步避免零值覆盖账号数据
+        if not node.game_state:
+            return
         self.accountPool.update_from_status(
             machine_name, node.level, node.jin_bi, node.game_state,
             current_account=node.current_account,

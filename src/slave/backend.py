@@ -256,7 +256,8 @@ class SlaveBackend(QThread):
         """将 TestDemo IPC 上报的状态文字映射为 GameState 值。"""
         if not text:
             return GameState.RUNNING
-        if "完成" in text:
+        # 精确匹配"已完成"，避免"完成过关"等中间状态被误判
+        if text == "已完成":
             return GameState.COMPLETED
         if "停" in text or "退出" in text:
             return GameState.SCRIPT_STOPPED

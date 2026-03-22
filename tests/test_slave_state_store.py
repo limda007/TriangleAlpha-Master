@@ -214,7 +214,11 @@ class TestMapIpcStatus:
     def test_completed_status(self):
         from slave.backend import SlaveBackend
         assert SlaveBackend._map_ipc_status("已完成") == GameState.COMPLETED
-        assert SlaveBackend._map_ipc_status("完成过关") == GameState.COMPLETED
+
+    def test_intermediate_completion_stays_running(self):
+        """'完成过关'等中间状态不应被误判为账号已完成"""
+        from slave.backend import SlaveBackend
+        assert SlaveBackend._map_ipc_status("完成过关") == GameState.RUNNING
 
     def test_stopped_status(self):
         from slave.backend import SlaveBackend
