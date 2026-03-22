@@ -229,102 +229,54 @@ class AccountDB(QObject):
 
     def upsert_from_sync(
         self, machine_name: str, accounts: list[dict[str, object]],
-        *, level_threshold: int = 0,
     ) -> tuple[int, int]:
-        """从 slave 的 accounts.json 同步账号：不存在则新增，存在则更新。
+        """从 slave 的 accounts.json 同步账号数据。
 
-        Args:
-            level_threshold: 下号等级阈值，level >= threshold 且非活跃视为已完成。
-                             0 表示未配置，不做完成判断。
+        职责：仅更新 level/jin_bi（非运行中账号）+ 封禁检测。
+        不插入新账号、不改 status、不改 assigned_machine。
 
         Returns:
-            (inserted, updated) 元组
+            (0, updated) 元组 — inserted 永远为 0
         """
-        inserted = updated = 0
+        updated = 0
         for acc in accounts:
             username = str(acc.get("username", "")).strip()
             if not username:
                 continue
-            is_banned = bool(acc.get("is_banned"))
-            is_active = bool(acc.get("is_active"))
-            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
-            jin_bi = str(acc.get("jin_bi", "0"))
-            is_completed = (
-                not is_active
-                and not is_banned
-                and level_threshold > 0
-                and level >= level_threshold
-            )
 
             existing = self._conn.execute(
-                "SELECT id, status, level, jin_bi FROM accounts WHERE username = ?", (username,),
+                "SELECT id, status FROM accounts WHERE username = ?",
+                (username,),
             ).fetchone()
-
             if existing is None:
-                if is_banned:
-                    status = "已封禁"
-                elif is_completed:
-                    status = "已完成"
-                elif is_active:
-                    status = "运行中"
-                else:
-                    status = "空闲中"
-                assigned = machine_name if is_active else ""
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_completed else None
-                self._conn.execute(
-                    "INSERT INTO accounts "
-                    "(username, password, bind_email, bind_email_pwd, status, "
-                    " assigned_machine, level, jin_bi, completed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (username, str(acc.get("password", "")),
-                     str(acc.get("bind_email", "")),
-                     str(acc.get("bind_email_pwd", "")),
-                     status, assigned, level, jin_bi, now),
-                )
-                inserted += 1
-            else:
-                # 运行中账号的 level/jin_bi 由 STATUS 实时更新，
-                # ACCOUNT_SYNC 不覆盖，避免实时值和静态值交替闪烁
-                is_running = existing["status"] == "运行中"
-                if is_running:
-                    parts: list[str] = []
-                    params: list[object] = []
-                else:
-                    parts = ["level = ?", "jin_bi = ?"]
-                    params = [level, jin_bi]
-                if is_banned and existing["status"] != "已封禁":
-                    parts.append("status = '已封禁'")
-                elif is_active and existing["status"] != "运行中":
-                    # IsActive=true → 恢复为运行中（可能从已完成/空闲中重新开始）
-                    parts.extend([
-                        "status = '运行中'", "assigned_machine = ?",
-                        "completed_at = NULL",
-                    ])
-                    params.append(machine_name)
-                elif is_completed and existing["status"] in ("空闲中", "运行中"):
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if not is_running:
-                        parts.extend(["status = '已完成'", "completed_at = ?"])
-                        params.append(now)
-                    else:
-                        # 运行中 → 已完成，同时写入最终 level/jin_bi
-                        parts.extend([
-                            "level = ?", "jin_bi = ?",
-                            "status = '已完成'", "completed_at = ?",
-                        ])
-                        params.extend([level, jin_bi, now])
-                if parts:
-                    self._conn.execute(
-                        f"UPDATE accounts SET {', '.join(parts)} WHERE id = ?",
-                        (*params, existing["id"]),
-                    )
-                updated += 1
+                continue  # 不插入新账号，只有 master 导入才创建
 
-        if inserted or updated:
+            is_banned = bool(acc.get("is_banned"))
+            if is_banned and existing["status"] != "已封禁":
+                self._conn.execute(
+                    "UPDATE accounts SET status='已封禁' WHERE id = ?",
+                    (existing["id"],),
+                )
+                updated += 1
+                continue
+
+            # 运行中账号的 level/jin_bi 由 STATUS 实时更新，SYNC 不覆盖
+            if existing["status"] == "运行中":
+                continue
+
+            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
+            jin_bi = str(acc.get("jin_bi", "0"))
+            self._conn.execute(
+                "UPDATE accounts SET level = ?, jin_bi = ? WHERE id = ?",
+                (level, jin_bi, existing["id"]),
+            )
+            updated += 1
+
+        if updated:
             self._conn.commit()
             self._refresh_counts()
             self.pool_changed.emit()
-        return inserted, updated
+        return 0, updated
 
     # ── 查询 ───────────────────────────────────────────────
 
