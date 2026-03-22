@@ -1,13 +1,10 @@
 """大屏模式页面 — 节点表格 + 账号池 + 操作按钮，一屏总览"""
 from __future__ import annotations
 
-import json
-import threading
-import urllib.error
-import urllib.request
 from datetime import datetime
 
-from PyQt6.QtCore import QSize, Qt, QTimer
+import httpx
+from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -55,6 +52,46 @@ from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
+
+_BALANCE_API = "http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance"
+
+
+class _BalanceWorker(QThread):
+    """后台查询验证码余额"""
+
+    result_ready = pyqtSignal(str, str)  # (text, color)
+
+    def __init__(self, key_code: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._key = key_code
+
+    def run(self) -> None:
+        try:
+            resp = httpx.get(_BALANCE_API, params={"keyCode": self._key}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("success") or data.get("Success"):
+                info = data.get("data") or data.get("Data") or {}
+                total = float(info.get("totalBalance") or info.get("TotalBalance") or 0)
+                money = float(info.get("money") or info.get("Money") or 0)
+                free = float(info.get("freeMoney") or info.get("FreeMoney") or 0)
+                user = info.get("userName") or info.get("UserName") or ""
+                if total > 10:
+                    color = "#2e7d32"
+                elif total > 2:
+                    color = "#e65100"
+                else:
+                    color = "#c62828"
+                text = f"¥{total:.2f}（付费 ¥{money:.2f} + 积分 ¥{free:.2f}）"
+                if user:
+                    text = f"{user}  {text}"
+                self.result_ready.emit(text, color)
+            else:
+                err = data.get("error") or data.get("Error") or "未知错误"
+                self.result_ready.emit(f"查询失败: {err}", "#c62828")
+        except Exception as exc:
+            self.result_ready.emit(f"网络异常: {exc}", "#c62828")
+
 
 _NODE_HEADERS = [
     "", "机器名", "IP地址", "挂机账号", "等级", "金币",
@@ -686,35 +723,11 @@ class BigScreenInterface(ScrollArea):
         self._balanceLabel.setText("查询中...")
         self._balanceLabel.setStyleSheet("font-size: 14px; font-weight: bold; color: gray;")
 
-        def _fetch() -> None:
-            try:
-                url = f"http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance?keyCode={key}"
-                req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                if data.get("success") or data.get("Success"):
-                    info = data.get("data") or data.get("Data") or {}
-                    total = float(info.get("totalBalance") or info.get("TotalBalance") or 0)
-                    money = float(info.get("money") or info.get("Money") or 0)
-                    free = float(info.get("freeMoney") or info.get("FreeMoney") or 0)
-                    user = info.get("userName") or info.get("UserName") or ""
-                    if total > 10:
-                        color = "#2e7d32"  # 绿色
-                    elif total > 2:
-                        color = "#e65100"  # 橙色
-                    else:
-                        color = "#c62828"  # 红色
-                    text = f"¥{total:.2f}（付费 ¥{money:.2f} + 积分 ¥{free:.2f}）"
-                    if user:
-                        text = f"{user}  {text}"
-                    QTimer.singleShot(0, lambda: self._updateBalanceLabel(text, color))
-                else:
-                    err = data.get("error") or data.get("Error") or "未知错误"
-                    QTimer.singleShot(0, lambda _err=err: self._updateBalanceLabel(f"查询失败: {_err}", "#c62828"))
-            except Exception as exc:
-                QTimer.singleShot(0, lambda _exc=exc: self._updateBalanceLabel(f"网络异常: {_exc}", "#c62828"))
-
-        threading.Thread(target=_fetch, daemon=True).start()
+        worker = _BalanceWorker(key, parent=self)
+        worker.result_ready.connect(self._updateBalanceLabel)
+        worker.finished.connect(worker.deleteLater)
+        self._balance_worker = worker  # 防止 GC
+        worker.start()
 
     def _updateBalanceLabel(self, text: str, color: str) -> None:
         """更新余额标签（主线程调用）"""
