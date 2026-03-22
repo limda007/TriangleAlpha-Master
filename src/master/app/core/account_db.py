@@ -273,7 +273,8 @@ class AccountDB(QObject):
                 continue
             is_banned = bool(acc.get("is_banned"))
             is_active = bool(acc.get("is_active"))
-            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
+            level_raw = str(acc.get("level", "0"))
+            level = int(level_raw) if level_raw.isdigit() else 0
             jin_bi = str(acc.get("jin_bi", "0"))
 
             existing = self._conn.execute(

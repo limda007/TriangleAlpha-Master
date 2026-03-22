@@ -153,13 +153,13 @@ class MainWindow(FluentWindow):
         )
         # pool_changed → 节流上传检查
         self.accountPool.pool_changed.connect(self.platformSyncer.on_pool_changed)
-        # 设置页变更 → 重新配置
+        # 设置页变更 → 重新配置 + 刷新大屏 tab
         self.settingInterface.platformSettingsChanged.connect(self._onPlatformSettingsChanged)
         # 错误/成功通知
         self.platformSyncer.error_occurred.connect(self._onPlatformError)
         self.platformSyncer.upload_finished.connect(self._onPlatformUploadDone)
-        # 启动
-        self.platformSyncer.start()
+        # 状态变化 → 大屏 tab
+        self.platformSyncer.status_changed.connect(self._onPlatformStatusChanged)
 
     def _onPlatformSettingsChanged(self) -> None:
         self.platformSyncer.configure(
@@ -169,6 +169,8 @@ class MainWindow(FluentWindow):
             password=cfg.get(cfg.platformPassword),
             group_name=cfg.get(cfg.platformGroupName),
         )
+        # 双向同步：设置页 → 大屏 tab
+        self.bigscreenInterface.refreshPlatformFields()
 
     def _onPlatformError(self, msg: str) -> None:
         InfoBar.error(
@@ -182,6 +184,19 @@ class MainWindow(FluentWindow):
                 "平台上传", f"成功上传 {count} 个账号",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
             )
+        self._syncPlatformStats()
+
+    def _onPlatformStatusChanged(self, status: str) -> None:
+        """PlatformSyncer 状态变化 → 更新大屏 tab"""
+        self.bigscreenInterface.updatePlatformStatus(status)
+        self._syncPlatformStats()
+
+    def _syncPlatformStats(self) -> None:
+        """同步平台统计到大屏 tab"""
+        s = self.platformSyncer
+        self.bigscreenInterface.updatePlatformStats(
+            s.total_uploaded, s.total_taken, s.last_sync_time,
+        )
 
     def _onNodeReconnect(self, machine_name: str) -> None:
         """节点上线时自动重发其绑定的账号"""

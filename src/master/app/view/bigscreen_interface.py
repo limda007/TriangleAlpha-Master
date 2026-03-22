@@ -36,6 +36,7 @@ from qfluentwidgets import (
     LineEdit,
     MenuAnimationType,
     MessageBox,
+    PasswordLineEdit,
     Pivot,
     PlainTextEdit,
     PrimaryPushButton,
@@ -43,6 +44,7 @@ from qfluentwidgets import (
     RoundMenu,
     ScrollArea,
     SpinBox,
+    SwitchButton,
     TableWidget,
 )
 from qfluentwidgets import (
@@ -50,6 +52,7 @@ from qfluentwidgets import (
 )
 
 from common.protocol import TcpCommand
+from master.app.common.config import cfg
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
@@ -489,11 +492,15 @@ class BigScreenInterface(ScrollArea):
         # ── Page 4: 验证码 ──
         tokenPage = self._buildTokenPage()
 
+        # ── Page 5: 销售平台 ──
+        platformPage = self._buildPlatformPage()
+
         # 注册到 Pivot
         self._addActionPage(opPage, "opPage", "操作")
         self._addActionPage(filePage, "filePage", "文件")
         self._addActionPage(cfgPage, "cfgPage", "配置")
         self._addActionPage(tokenPage, "tokenPage", "验证码")
+        self._addActionPage(platformPage, "platformPage", "销售平台")
 
         self._actionStack.currentChanged.connect(self._onActionPageChanged)
         self._actionStack.setCurrentWidget(opPage)
@@ -675,6 +682,112 @@ class BigScreenInterface(ScrollArea):
             QTimer.singleShot(500, self._queryBalance)
 
         return page
+
+    def _buildPlatformPage(self) -> QWidget:
+        """销售平台页：启用开关 + 用户名密码 + 连接状态 + 同步统计"""
+        page = QWidget()
+        page.setObjectName("platformPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(10)
+
+        card = GroupHeaderCardWidget(page)
+        card.setTitle("销售平台")
+        card.setBorderRadius(8)
+
+        # 启用开关
+        self._platSwitch = SwitchButton(page)
+        self._platSwitch.setChecked(cfg.get(cfg.platformEnabled))
+        card.addGroup(FIF.GLOBE, "启用平台对接", "自动上传已完成账号", self._platSwitch)
+
+        # 用户名
+        self._platUsername = LineEdit(page)
+        self._platUsername.setPlaceholderText("平台用户名")
+        self._platUsername.setClearButtonEnabled(True)
+        self._platUsername.setFixedWidth(200)
+        self._platUsername.setText(cfg.get(cfg.platformUsername))
+        card.addGroup(FIF.PEOPLE, "用户名", "平台登录用户名", self._platUsername)
+
+        # 密码
+        self._platPassword = PasswordLineEdit(page)
+        self._platPassword.setPlaceholderText("平台密码")
+        self._platPassword.setFixedWidth(200)
+        self._platPassword.setText(cfg.get(cfg.platformPassword))
+        group = card.addGroup(FIF.FINGERPRINT, "密码", "平台登录密码", self._platPassword)
+        group.setSeparatorVisible(True)
+
+        # 连接状态 + 同步统计
+        statusWidget = QWidget(page)
+        statusLayout = QHBoxLayout(statusWidget)
+        statusLayout.setContentsMargins(0, 0, 0, 0)
+        statusLayout.setSpacing(12)
+
+        self._platStatusDot = QLabel("●", statusWidget)
+        self._platStatusDot.setFixedWidth(16)
+        self._platStatusDot.setStyleSheet("color: #999; font-size: 14px;")
+        statusLayout.addWidget(self._platStatusDot)
+
+        self._platStatusLabel = CaptionLabel("未连接", statusWidget)
+        statusLayout.addWidget(self._platStatusLabel)
+        statusLayout.addStretch()
+
+        statsBox = QVBoxLayout()
+        statsBox.setSpacing(2)
+        self._platSyncTime = CaptionLabel("最近同步: --", statusWidget)
+        self._platUploadCount = CaptionLabel("已上传: 0", statusWidget)
+        self._platTakenCount = CaptionLabel("已取号: 0", statusWidget)
+        for lbl in (self._platSyncTime, self._platUploadCount, self._platTakenCount):
+            lbl.setStyleSheet("color: #888; font-size: 12px;")
+            statsBox.addWidget(lbl)
+        statusLayout.addLayout(statsBox)
+
+        card.addGroup(FIF.SYNC, "同步状态", "平台连接与同步统计", statusWidget)
+
+        # 底部保存按钮
+        bottomLayout = QHBoxLayout()
+        bottomLayout.setContentsMargins(24, 15, 24, 20)
+        bottomLayout.setSpacing(10)
+        hintLabel = CaptionLabel("保存后自动连接平台")
+        bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        bottomLayout.addStretch(1)
+        btnSave = PrimaryPushButton(FIF.SAVE, "保存")
+        btnSave.setFixedHeight(36)
+        btnSave.clicked.connect(self._savePlatformConfig)
+        bottomLayout.addWidget(btnSave, 0, Qt.AlignmentFlag.AlignRight)
+        card.vBoxLayout.addLayout(bottomLayout)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return page
+
+    def _savePlatformConfig(self) -> None:
+        """保存平台配置到 cfg 并触发重连"""
+        cfg.set(cfg.platformEnabled, self._platSwitch.isChecked())
+        cfg.set(cfg.platformUsername, self._platUsername.text().strip())
+        cfg.set(cfg.platformPassword, self._platPassword.text())
+        # 触发 MainWindow 的 platformSettingsChanged 信号链
+        window = self.window()
+        if hasattr(window, "settingInterface"):
+            window.settingInterface.platformSettingsChanged.emit()
+
+    def updatePlatformStatus(self, status: str) -> None:
+        """更新连接状态显示（由 MainWindow 转发 PlatformSyncer.status_changed）"""
+        color_map = {"已连接": "#2ecc71", "连接失败": "#e74c3c", "未连接": "#999"}
+        color = color_map.get(status, "#999")
+        self._platStatusDot.setStyleSheet(f"color: {color}; font-size: 14px;")
+        self._platStatusLabel.setText(status)
+
+    def updatePlatformStats(self, uploaded: int, taken: int, sync_time: str) -> None:
+        """更新同步统计（由 MainWindow 转发）"""
+        self._platSyncTime.setText(f"最近同步: {sync_time or '--'}")
+        self._platUploadCount.setText(f"已上传: {uploaded}")
+        self._platTakenCount.setText(f"已取号: {taken}")
+
+    def refreshPlatformFields(self) -> None:
+        """从 cfg 刷新平台 tab 控件值（设置页修改后调用）"""
+        self._platSwitch.setChecked(cfg.get(cfg.platformEnabled))
+        self._platUsername.setText(cfg.get(cfg.platformUsername))
+        self._platPassword.setText(cfg.get(cfg.platformPassword))
 
     def _saveApiKey(self) -> None:
         """保存 API Key 到本地配置"""

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -18,7 +19,7 @@ _MAX_AUTH_FAILURES = 3
 
 
 class _SyncWorker(QThread):
-    """后台线程：执行上传或轮询"""
+    """后台线程：执行上传、轮询、连接测试或 Token 刷新"""
 
     upload_done = pyqtSignal(list)       # 上传成功的 username 列表
     poll_done = pyqtSignal(list)         # 平台已取号的 username 列表
@@ -32,22 +33,50 @@ class _SyncWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self._client_cfg = client_cfg
-        self._task = task  # "upload" 或 "poll"
+        self._task = task  # "upload" / "poll" / "connect" / "refresh"
         self._upload_text = upload_text
         self._group_name = group_name
 
     def run(self) -> None:
-        # httpx.Client 在线程内创建，每次新建（Architect #1）
         try:
             with httpx.Client() as http:
                 if self._task == "upload":
                     self._do_upload(http)
                 elif self._task == "poll":
                     self._do_poll(http)
+                elif self._task == "connect":
+                    self._do_connect(http)
+                elif self._task == "refresh":
+                    self._do_refresh(http)
         except PlatformAPIError as e:
             self.error_occurred.emit(str(e))
         except Exception as e:
             self.error_occurred.emit(f"平台同步异常：{e}")
+
+    def _do_connect(self, http: httpx.Client) -> None:
+        """登录验证连接（始终发起网络请求验证凭据有效性）"""
+        if self._client_cfg.refresh_token:
+            try:
+                self._client_cfg.refresh(http)
+            except PlatformAPIError:
+                self._client_cfg.login(http)
+        else:
+            self._client_cfg.login(http)
+        self.tokens_updated.emit(
+            self._client_cfg.access_token,
+            self._client_cfg.refresh_token,
+        )
+
+    def _do_refresh(self, http: httpx.Client) -> None:
+        """主动刷新 Token"""
+        if self._client_cfg.refresh_token:
+            self._client_cfg.refresh(http)
+        else:
+            self._client_cfg.login(http)
+        self.tokens_updated.emit(
+            self._client_cfg.access_token,
+            self._client_cfg.refresh_token,
+        )
 
     def _do_upload(self, http: httpx.Client) -> None:
         result = self._client_cfg.import_accounts(
@@ -95,6 +124,8 @@ class PlatformSyncer(QObject):
 
     error_occurred = pyqtSignal(str)
     upload_finished = pyqtSignal(int)  # 上传成功数量
+    # 状态变化: "已连接" / "未连接" / "连接失败"
+    status_changed = pyqtSignal(str)
 
     def __init__(self, account_db: AccountDB, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -107,6 +138,11 @@ class PlatformSyncer(QObject):
         self._client = PlatformClient()
         self._worker: _SyncWorker | None = None
         self._consecutive_auth_failures = 0
+
+        # 同步统计
+        self._total_uploaded = 0
+        self._total_taken = 0
+        self._last_sync_time = ""
 
         # 节流上传检查（Architect #4）
         self._upload_dirty = False
@@ -125,12 +161,16 @@ class PlatformSyncer(QObject):
         self._retry_timer.setInterval(120_000)
         self._retry_timer.timeout.connect(self.try_upload_completed)
 
+        # Token 主动刷新（30 分钟）
+        self._token_timer = QTimer(self)
+        self._token_timer.setInterval(30 * 60_000)
+        self._token_timer.timeout.connect(self._do_refresh)
+
     def configure(
         self, *, enabled: bool, api_url: str,
         username: str, password: str, group_name: str,
     ) -> None:
         """配置平台参数"""
-        was_enabled = self._enabled
         self._enabled = enabled
         self._api_url = api_url.rstrip("/") if api_url else ""
         self._username = username
@@ -153,19 +193,24 @@ class PlatformSyncer(QObject):
 
         self._consecutive_auth_failures = 0
 
+        # 始终重启（支持改密码后立即重连）
+        self._stop_timers()
         if enabled and self._api_url:
-            if not was_enabled:
-                self.start()
+            self.status_changed.emit("未连接")
+            self.start()
         else:
-            self._stop_timers()
+            self.status_changed.emit("未连接")
 
     def start(self) -> None:
-        """启动轮询和重试定时器"""
+        """启动：立即连接测试 + 定时轮询 + 定时刷新 Token"""
         if not self._enabled or not self._api_url:
             return
         self._poll_timer.start()
         self._retry_timer.start()
-        # 启动 5s 后扫描已有未上传账号（Critic #6）
+        self._token_timer.start()
+        # 立即连接测试
+        QTimer.singleShot(500, self._do_connect)
+        # 5s 后扫描已有未上传账号（Critic #6）
         QTimer.singleShot(5000, self.try_upload_completed)
 
     def stop(self) -> None:
@@ -185,6 +230,7 @@ class PlatformSyncer(QObject):
         self._poll_timer.stop()
         self._retry_timer.stop()
         self._upload_throttle.stop()
+        self._token_timer.stop()
 
     # ── pool_changed 节流上传 ──
 
@@ -232,11 +278,40 @@ class PlatformSyncer(QObject):
     def _on_upload_done(self, usernames: list[str]) -> None:
         """上传成功 → 主线程标记 DB（Architect #5）"""
         count = self._db.mark_uploaded(usernames)
+        self._total_uploaded += count
+        self._last_sync_time = datetime.now().strftime("%H:%M:%S")
         self.upload_finished.emit(count)
+        self.status_changed.emit("已连接")
         # 检查是否有积压的脏数据
         if self._upload_dirty:
             self._upload_dirty = False
             QTimer.singleShot(1000, self.try_upload_completed)
+
+    # ── 连接测试 / Token 刷新 ──
+
+    def _do_connect(self) -> None:
+        """启动时连接测试"""
+        if not self._enabled or not self._api_url:
+            return
+        if self._worker and self._worker.isRunning():
+            return
+        self._worker = _SyncWorker(self._client, "connect", parent=self)
+        self._worker.tokens_updated.connect(self._on_tokens_updated)
+        self._worker.error_occurred.connect(self._on_worker_error)
+        self._worker.finished.connect(self._cleanup_worker)
+        self._worker.start()
+
+    def _do_refresh(self) -> None:
+        """定时刷新 Token（30 分钟心跳）"""
+        if not self._enabled or not self._api_url:
+            return
+        if self._worker and self._worker.isRunning():
+            return
+        self._worker = _SyncWorker(self._client, "refresh", parent=self)
+        self._worker.tokens_updated.connect(self._on_tokens_updated)
+        self._worker.error_occurred.connect(self._on_worker_error)
+        self._worker.finished.connect(self._cleanup_worker)
+        self._worker.start()
 
     # ── 轮询逻辑 ──
 
@@ -260,6 +335,9 @@ class PlatformSyncer(QObject):
     def _on_poll_done(self, usernames: list[str]) -> None:
         """轮询成功 → 主线程更新 DB（Architect #5）"""
         self._db.mark_taken_by_platform(usernames)
+        self._total_taken += len(usernames)
+        self._last_sync_time = datetime.now().strftime("%H:%M:%S")
+        self.status_changed.emit("已连接")
 
     # ── Token / 错误处理 ──
 
@@ -275,6 +353,8 @@ class PlatformSyncer(QObject):
         self._consecutive_auth_failures = 0
         self._client.access_token = at
         self._client.refresh_token = rt
+        self._last_sync_time = datetime.now().strftime("%H:%M:%S")
+        self.status_changed.emit("已连接")
         if at:
             self._db.set_config("platform_access_token", at)
         if rt:
@@ -283,6 +363,7 @@ class PlatformSyncer(QObject):
     def _on_worker_error(self, msg: str) -> None:
         """Worker 错误处理 + 连续认证失败保护（Critic #7）"""
         logger.warning("平台同步错误：%s", msg)
+        self.status_changed.emit("连接失败")
         if "登录失败" in msg or "刷新令牌失败" in msg:
             self._consecutive_auth_failures += 1
             if self._consecutive_auth_failures >= _MAX_AUTH_FAILURES:
@@ -290,3 +371,17 @@ class PlatformSyncer(QObject):
                 self.error_occurred.emit("连续认证失败，已暂停平台同步。请检查设置。")
                 return
         self.error_occurred.emit(msg)
+
+    # ── 统计属性 ──
+
+    @property
+    def total_uploaded(self) -> int:
+        return self._total_uploaded
+
+    @property
+    def total_taken(self) -> int:
+        return self._total_taken
+
+    @property
+    def last_sync_time(self) -> str:
+        return self._last_sync_time
