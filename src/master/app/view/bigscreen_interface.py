@@ -694,10 +694,10 @@ class BigScreenInterface(ScrollArea):
                     data = json.loads(resp.read().decode("utf-8"))
                 if data.get("success") or data.get("Success"):
                     info = data.get("data") or data.get("Data") or {}
-                    total = float(info.get("totalBalance", 0))
-                    money = float(info.get("money", 0))
-                    free = float(info.get("freeMoney", 0))
-                    user = info.get("userName", "")
+                    total = float(info.get("totalBalance") or info.get("TotalBalance") or 0)
+                    money = float(info.get("money") or info.get("Money") or 0)
+                    free = float(info.get("freeMoney") or info.get("FreeMoney") or 0)
+                    user = info.get("userName") or info.get("UserName") or ""
                     if total > 10:
                         color = "#2e7d32"  # 绿色
                     elif total > 2:
