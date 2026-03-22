@@ -229,29 +229,58 @@ class AccountDB(QObject):
 
     def upsert_from_sync(
         self, machine_name: str, accounts: list[dict[str, object]],
+        *, level_threshold: int = 0,
     ) -> tuple[int, int]:
         """从 slave 的 accounts.json 同步账号数据。
 
-        职责：仅更新 level/jin_bi（非运行中账号）+ 封禁检测。
-        不插入新账号、不改 status、不改 assigned_machine。
+        职责：
+        - 不存在的账号 → 插入为空闲中（或已封禁/已完成）
+        - 已存在的账号 → 仅更新 level/jin_bi（非运行中）+ 封禁检测
+        - 不改已有账号的 status / assigned_machine
 
         Returns:
-            (0, updated) 元组 — inserted 永远为 0
+            (inserted, updated) 元组
         """
-        updated = 0
+        inserted = updated = 0
         for acc in accounts:
             username = str(acc.get("username", "")).strip()
             if not username:
                 continue
+            is_banned = bool(acc.get("is_banned"))
+            is_active = bool(acc.get("is_active"))
+            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
+            jin_bi = str(acc.get("jin_bi", "0"))
 
             existing = self._conn.execute(
                 "SELECT id, status FROM accounts WHERE username = ?",
                 (username,),
             ).fetchone()
-            if existing is None:
-                continue  # 不插入新账号，只有 master 导入才创建
 
-            is_banned = bool(acc.get("is_banned"))
+            if existing is None:
+                # 新账号：确定初始状态
+                if is_banned:
+                    status = "已封禁"
+                elif (not is_active and level_threshold > 0
+                      and level >= level_threshold):
+                    status = "已完成"
+                else:
+                    status = "空闲中"
+                now = (datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                       if status == "已完成" else None)
+                self._conn.execute(
+                    "INSERT INTO accounts "
+                    "(username, password, bind_email, bind_email_pwd, "
+                    " status, level, jin_bi, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (username, str(acc.get("password", "")),
+                     str(acc.get("bind_email", "")),
+                     str(acc.get("bind_email_pwd", "")),
+                     status, level, jin_bi, now),
+                )
+                inserted += 1
+                continue
+
+            # 已有账号：封禁检测
             if is_banned and existing["status"] != "已封禁":
                 self._conn.execute(
                     "UPDATE accounts SET status='已封禁' WHERE id = ?",
@@ -264,19 +293,17 @@ class AccountDB(QObject):
             if existing["status"] == "运行中":
                 continue
 
-            level = int(acc.get("level", 0)) if str(acc.get("level", "0")).isdigit() else 0
-            jin_bi = str(acc.get("jin_bi", "0"))
             self._conn.execute(
                 "UPDATE accounts SET level = ?, jin_bi = ? WHERE id = ?",
                 (level, jin_bi, existing["id"]),
             )
             updated += 1
 
-        if updated:
+        if inserted or updated:
             self._conn.commit()
             self._refresh_counts()
             self.pool_changed.emit()
-        return 0, updated
+        return inserted, updated
 
     # ── 查询 ───────────────────────────────────────────────
 

@@ -147,10 +147,12 @@ class MainWindow(FluentWindow):
         )
 
     def _onAccountSync(self, machine_name: str, accounts: object) -> None:
-        """slave ACCOUNT_SYNC → 同步 level/jin_bi + 封禁检测"""
+        """slave ACCOUNT_SYNC → 同步账号数据 + 封禁检测"""
         if not isinstance(accounts, list):
             return
-        self.accountPool.upsert_from_sync(machine_name, accounts)
+        node = self.nodeManager.nodes.get(machine_name)
+        threshold = int(node.level_threshold) if node and node.level_threshold.isdigit() else 0
+        self.accountPool.upsert_from_sync(machine_name, accounts, level_threshold=threshold)
 
     def _onNeedAccount(self, machine_name: str) -> None:
         """TestDemo NEED_ACCOUNT → 自动分配账号并下发。

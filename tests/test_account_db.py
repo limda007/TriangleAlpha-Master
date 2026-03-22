@@ -273,20 +273,55 @@ class TestMigration:
 class TestUpsertFromSync:
     """slave ACCOUNT_SYNC → upsert_from_sync 测试
 
-    重构后职责：仅更新 level/jin_bi（非运行中）+ 封禁检测。
-    不插入新账号、不改 status、不改 assigned_machine。
+    职责：新账号插入为空闲中（或已封禁/已完成）；
+    已有账号仅更新 level/jin_bi（非运行中）+ 封禁检测；
+    不改已有账号的 status / assigned_machine。
     """
 
-    def test_sync_does_not_insert_unknown_account(self, db: AccountDB) -> None:
-        """不存在的账号不插入"""
+    def test_insert_new_as_idle(self, db: AccountDB) -> None:
+        """不存在的账号插入为空闲中"""
         accounts = [
             {"username": "u1", "password": "p1", "level": 10, "jin_bi": "500",
              "is_banned": False, "is_active": False},
         ]
         inserted, updated = db.upsert_from_sync("VM-01", accounts)
-        assert inserted == 0
+        assert inserted == 1
         assert updated == 0
-        assert db.total_count == 0
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.IDLE
+        assert acc.assigned_machine == ""  # 不绑定机器
+
+    def test_insert_new_banned(self, db: AccountDB) -> None:
+        """新账号 is_banned → 已封禁"""
+        accounts = [
+            {"username": "u1", "password": "p1", "level": 3, "jin_bi": "0",
+             "is_banned": True, "is_active": False},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.BANNED
+
+    def test_insert_new_completed_by_threshold(self, db: AccountDB) -> None:
+        """新账号 is_active=False + level >= threshold → 已完成"""
+        accounts = [
+            {"username": "u1", "password": "p1", "level": 18, "jin_bi": "50000",
+             "is_banned": False, "is_active": False},
+        ]
+        db.upsert_from_sync("VM-01", accounts, level_threshold=18)
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.COMPLETED
+        assert acc.completed_at is not None
+
+    def test_insert_active_still_idle(self, db: AccountDB) -> None:
+        """新账号 is_active=True 也插为空闲中（不自动绑定）"""
+        accounts = [
+            {"username": "u1", "password": "p1", "level": 5, "jin_bi": "200",
+             "is_banned": False, "is_active": True},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.IDLE
+        assert acc.assigned_machine == ""
 
     def test_update_existing_accounts(self, db: AccountDB) -> None:
         """已存在的空闲账号应更新 level/jin_bi"""
@@ -304,7 +339,7 @@ class TestUpsertFromSync:
         assert acc.status == AccountStatus.IDLE
 
     def test_sync_does_not_change_status(self, db: AccountDB) -> None:
-        """SYNC 不改变账号状态（即使 is_active=True）"""
+        """SYNC 不改变已有账号状态"""
         db.import_fresh("u1----p1")
         accounts = [
             {"username": "u1", "level": 10, "jin_bi": "500",
@@ -312,7 +347,7 @@ class TestUpsertFromSync:
         ]
         db.upsert_from_sync("VM-01", accounts)
         acc = db.get_all_accounts()[0]
-        assert acc.status == AccountStatus.IDLE  # 状态不变
+        assert acc.status == AccountStatus.IDLE
 
     def test_sync_does_not_change_assigned_machine(self, db: AccountDB) -> None:
         """SYNC 不改变 assigned_machine"""
@@ -324,7 +359,7 @@ class TestUpsertFromSync:
         ]
         db.upsert_from_sync("VM-02", accounts)
         acc = db.get_all_accounts()[0]
-        assert acc.assigned_machine == "VM-01"  # 不被 VM-02 覆盖
+        assert acc.assigned_machine == "VM-01"
 
     def test_banned_updates_existing_status(self, db: AccountDB) -> None:
         """已有账号变为封禁"""
@@ -386,8 +421,8 @@ class TestUpsertFromSync:
         assert acc.jin_bi == "3500"
         assert acc.level == 10
 
-    def test_mixed_known_and_unknown(self, db: AccountDB) -> None:
-        """已知账号更新，未知账号跳过"""
+    def test_mixed_insert_and_update(self, db: AccountDB) -> None:
+        """已知账号更新，未知账号插入"""
         db.import_fresh("u1----p1")
         accounts = [
             {"username": "u1", "level": 15, "jin_bi": "3000",
@@ -396,9 +431,9 @@ class TestUpsertFromSync:
              "is_banned": False, "is_active": False},
         ]
         inserted, updated = db.upsert_from_sync("VM-01", accounts)
-        assert inserted == 0
+        assert inserted == 1
         assert updated == 1
-        assert db.total_count == 1  # u2 未插入
+        assert db.total_count == 2
 
 
 class TestCounts:
