@@ -1,7 +1,9 @@
 """大屏模式页面 — 节点表格 + 账号池 + 操作按钮，一屏总览"""
 from __future__ import annotations
 
+import base64
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
@@ -873,6 +875,20 @@ class BigScreenInterface(ScrollArea):
             if state_item.foreground().color() != color:
                 state_item.setForeground(color)
 
+        # Token 告警：缺少或不一致时在运行状态后追加警告
+        master_key = self._pool.get_config("api_key")
+        if master_key and state_item:
+            if not node.token_key:
+                warn_text = texts[7] + " ⚠缺Key"
+                if state_item.text() != warn_text:
+                    state_item.setText(warn_text)
+                    state_item.setForeground(QColor("#c62828"))
+            elif node.token_key != master_key:
+                warn_text = texts[7] + " ⚠Key不一致"
+                if state_item.text() != warn_text:
+                    state_item.setText(warn_text)
+                    state_item.setForeground(QColor("#e65100"))
+
     # ──────────────────────────────────────────────────────
     # 标题栏刷新
     # ──────────────────────────────────────────────────────
@@ -1075,9 +1091,9 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _sendFileToAll(self) -> None:
-        """下发账号文件 — 通过 UPDATE_TXT 覆盖 slave 端 accounts.txt"""
-        path, _ = QFileDialog.getOpenFileName(self, "选择账号文件", "", "Text (*.txt)")
-        if not path:
+        """批量分发文件 — 选择多个文件，覆盖式传输到每个节点的脚本目录"""
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
+        if not paths:
             return
         ips, selected = self._getTargetIPs()
         if not ips:
@@ -1086,20 +1102,31 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
-        try:
-            with open(path, encoding="utf-8") as f:
-                content = f.read()
-        except OSError as e:
-            InfoBar.error(
-                "读取失败", str(e),
-                parent=self, position=InfoBarPosition.TOP, duration=5000,
-            )
-            return
+        files_data: list[tuple[str, str]] = []
+        for path in paths:
+            try:
+                raw = Path(path).read_bytes()
+                filename = Path(path).name
+                content_b64 = base64.b64encode(raw).decode("ascii")
+                files_data.append((filename, content_b64))
+            except OSError as e:
+                InfoBar.error(
+                    "读取失败", f"{path}: {e}",
+                    parent=self, position=InfoBarPosition.TOP, duration=5000,
+                )
+                return
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
-        self._tcp.broadcast(ips, TcpCommand.UPDATE_TXT, content)
-        self._nm.add_history("下发文件", scope)
+        if not selected and not self._confirmDangerous(
+            "批量分发文件",
+            f"将向全部 {len(ips)} 个在线节点覆盖写入 {len(files_data)} 个文件，是否继续？",
+        ):
+            return
+        for filename, content_b64 in files_data:
+            self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
+        file_names = ", ".join(Path(p).name for p in paths)
+        self._nm.add_history("分发文件", scope, file_names)
         InfoBar.success(
-            "已下发", f"文件已发送到 {scope}",
+            "已分发", f"{len(files_data)} 个文件已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 

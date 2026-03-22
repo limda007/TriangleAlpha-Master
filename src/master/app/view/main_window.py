@@ -15,6 +15,7 @@ from master.app.common.config import RESOURCE_DIR, cfg
 from master.app.core.account_db import AccountDB
 from master.app.core.log_receiver import LogReceiverThread
 from master.app.core.node_manager import NodeManager
+from master.app.core.platform_syncer import PlatformSyncer
 from master.app.core.tcp_commander import TcpCommander
 from master.app.core.udp_listener import UdpListenerThread
 from master.app.view.account_interface import AccountInterface
@@ -76,6 +77,9 @@ class MainWindow(FluentWindow):
         # TestDemo NEED_ACCOUNT → 自动分配空闲账号
         self.nodeManager.need_account.connect(self._onNeedAccount)
 
+        # 平台同步
+        self._initPlatformSyncer()
+
     def _initNavigation(self):
         self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
         self.navigationInterface.addSeparator()
@@ -109,6 +113,7 @@ class MainWindow(FluentWindow):
             self.move(geo.width() // 2 - self.width() // 2, geo.height() // 2 - self.height() // 2)
 
     def closeEvent(self, e):
+        self.platformSyncer.stop()      # 首行，确保 worker 停止
         self.accountPool.close()
         self.udpListener.stop()
         self.logReceiver.stop()
@@ -126,6 +131,47 @@ class MainWindow(FluentWindow):
             "日志服务异常", msg,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
+
+    def _initPlatformSyncer(self) -> None:
+        self.platformSyncer = PlatformSyncer(self.accountPool, parent=self)
+        self.platformSyncer.configure(
+            enabled=cfg.get(cfg.platformEnabled),
+            api_url=cfg.get(cfg.platformApiUrl),
+            username=cfg.get(cfg.platformUsername),
+            password=cfg.get(cfg.platformPassword),
+            group_name=cfg.get(cfg.platformGroupName),
+        )
+        # pool_changed → 节流上传检查
+        self.accountPool.pool_changed.connect(self.platformSyncer.on_pool_changed)
+        # 设置页变更 → 重新配置
+        self.settingInterface.platformSettingsChanged.connect(self._onPlatformSettingsChanged)
+        # 错误/成功通知
+        self.platformSyncer.error_occurred.connect(self._onPlatformError)
+        self.platformSyncer.upload_finished.connect(self._onPlatformUploadDone)
+        # 启动
+        self.platformSyncer.start()
+
+    def _onPlatformSettingsChanged(self) -> None:
+        self.platformSyncer.configure(
+            enabled=cfg.get(cfg.platformEnabled),
+            api_url=cfg.get(cfg.platformApiUrl),
+            username=cfg.get(cfg.platformUsername),
+            password=cfg.get(cfg.platformPassword),
+            group_name=cfg.get(cfg.platformGroupName),
+        )
+
+    def _onPlatformError(self, msg: str) -> None:
+        InfoBar.error(
+            "平台同步异常", msg,
+            parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
+
+    def _onPlatformUploadDone(self, count: int) -> None:
+        if count > 0:
+            InfoBar.success(
+                "平台上传", f"成功上传 {count} 个账号",
+                parent=self, position=InfoBarPosition.TOP, duration=3000,
+            )
 
     def _onNodeReconnect(self, machine_name: str) -> None:
         """节点上线时自动重发其绑定的账号"""

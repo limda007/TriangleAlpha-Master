@@ -111,6 +111,7 @@ class HeartbeatService:
                         weapon_config = self._read_config("武器配置.txt")
                         level_threshold = self._read_config("下号等级.txt")
                         loot_count = self._read_config("舔包次数.txt")
+                        token_key = self._read_config("token.txt")
                         msg = build_udp_ext_online(
                             self._machine_name,
                             self._user_name,
@@ -122,6 +123,7 @@ class HeartbeatService:
                             weapon_config,
                             level_threshold,
                             loot_count,
+                            token_key,
                         )
                         data = msg.encode("utf-8")
                         target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)

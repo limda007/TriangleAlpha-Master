@@ -164,6 +164,7 @@ class NodeManager(QObject):
                 weapon_config=msg.weapon_config,
                 level_threshold=msg.level_threshold,
                 loot_count=msg.loot_count,
+                token_key=msg.token_key,
             )
         else:
             node = self.nodes[name]
@@ -178,6 +179,7 @@ class NodeManager(QObject):
             node.weapon_config = msg.weapon_config
             node.level_threshold = msg.level_threshold
             node.loot_count = msg.loot_count
+            node.token_key = msg.token_key
             node.last_seen = datetime.now()
         if is_new:
             self.node_online.emit(name)

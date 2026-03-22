@@ -72,6 +72,7 @@ class UdpMessage:
     level_threshold: str = ""
     loot_count: str = ""
     sync_payload: str = ""  # ACCOUNT_SYNC: base64 编码的 JSON 账号数组
+    token_key: str = ""     # EXT_ONLINE: slave 端 token.txt 内容
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -106,6 +107,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 weapon_config=parts[8] if len(parts) >= 9 else "",
                 level_threshold=parts[9] if len(parts) >= 10 else "",
                 loot_count=parts[10] if len(parts) >= 11 else "",
+                token_key=parts[11] if len(parts) >= 12 else "",
             )
         case "ACCOUNT_SYNC" if len(parts) >= 3:
             return UdpMessage(
@@ -129,11 +131,11 @@ def build_udp_ext_online(
     machine_name: str, user_name: str, cpu: float, mem: float,
     version: str, group: str, teammate_fill: str = "",
     weapon_config: str = "", level_threshold: str = "",
-    loot_count: str = "",
+    loot_count: str = "", token_key: str = "",
 ) -> str:
     return (
         f"EXT_ONLINE|{machine_name}|{user_name}|{cpu:.1f}|{mem:.1f}"
-        f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}"
+        f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}|{token_key}"
     )
 
 

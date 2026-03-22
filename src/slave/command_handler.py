@@ -198,20 +198,26 @@ class CommandHandler:
         return desc
 
     def _handle_set_config(self, parsed: ParsedTcpCommand) -> str:
-        """处理配置写入指令。"""
+        """处理配置写入指令，支持 BASE64 编码的二进制内容。"""
         filename, sep, content = parsed.payload.partition("|")
         if not sep:
             logger.error("配置格式错误，需要 filename|content")
             return ""
         filename = filename.strip()
-        content = content.strip()
-        if filename not in self._CONFIG_WHITELIST:
-            logger.warning("拒绝写入非白名单文件: %s", filename)
-            return ""
         fpath = self._safe_path(filename)
         if fpath is None:
             return ""
-        fpath.write_text(content, encoding="utf-8")
-        desc = f"配置已更新: {filename} = {content}"
+        # 支持 BASE64 前缀编码（二进制文件分发）
+        if content.startswith("BASE64:"):
+            try:
+                raw = base64.b64decode(content[7:])
+                fpath.write_bytes(raw)
+            except Exception:
+                logger.exception("BASE64 解码失败: %s", filename)
+                return ""
+        else:
+            content = content.strip()
+            fpath.write_text(content, encoding="utf-8")
+        desc = f"文件已更新: {filename}"
         logger.info("配置: %s", desc)
         return desc
