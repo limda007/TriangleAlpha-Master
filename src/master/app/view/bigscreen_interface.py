@@ -59,7 +59,8 @@ _BALANCE_API = "http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance"
 class _BalanceWorker(QThread):
     """后台查询验证码余额"""
 
-    result_ready = pyqtSignal(str, str)  # (text, color)
+    # (total, money, free, error)
+    result_ready = pyqtSignal(float, float, float, str)
 
     def __init__(self, key_code: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -75,22 +76,12 @@ class _BalanceWorker(QThread):
                 total = float(info.get("totalBalance") or info.get("TotalBalance") or 0)
                 money = float(info.get("money") or info.get("Money") or 0)
                 free = float(info.get("freeMoney") or info.get("FreeMoney") or 0)
-                user = info.get("userName") or info.get("UserName") or ""
-                if total > 10:
-                    color = "#2e7d32"
-                elif total > 2:
-                    color = "#e65100"
-                else:
-                    color = "#c62828"
-                text = f"¥{total:.2f}（付费 ¥{money:.2f} + 积分 ¥{free:.2f}）"
-                if user:
-                    text = f"{user}  {text}"
-                self.result_ready.emit(text, color)
+                self.result_ready.emit(total, money, free, "")
             else:
                 err = data.get("error") or data.get("Error") or "未知错误"
-                self.result_ready.emit(f"查询失败: {err}", "#c62828")
+                self.result_ready.emit(0, 0, 0, err)
         except Exception as exc:
-            self.result_ready.emit(f"网络异常: {exc}", "#c62828")
+            self.result_ready.emit(0, 0, 0, f"网络异常: {exc}")
 
 
 _NODE_HEADERS = [
@@ -620,19 +611,39 @@ class BigScreenInterface(ScrollArea):
             self._tokenInput.setText(saved_key)
         card.addGroup(FIF.FINGERPRINT, "API Key", "充值后复制 Key 粘贴到此处", self._tokenInput)
 
-        # 余额显示 + 查询按钮
+        # 余额显示（品字型布局）+ 查询按钮
         balanceWidget = QWidget(page)
-        balanceLayout = QHBoxLayout(balanceWidget)
-        balanceLayout.setContentsMargins(0, 0, 0, 0)
-        balanceLayout.setSpacing(8)
-        self._balanceLabel = CaptionLabel("--", balanceWidget)
-        self._balanceLabel.setStyleSheet("font-size: 14px; font-weight: bold;")
-        balanceLayout.addWidget(self._balanceLabel)
+        outerLayout = QHBoxLayout(balanceWidget)
+        outerLayout.setContentsMargins(0, 0, 0, 0)
+        outerLayout.setSpacing(12)
+
+        # 左侧品字型余额
+        balanceBox = QVBoxLayout()
+        balanceBox.setSpacing(2)
+        self._balanceTotalLabel = QLabel("¥--", balanceWidget)
+        self._balanceTotalLabel.setStyleSheet(
+            "font-size: 20px; font-weight: bold; color: #333;"
+        )
+        balanceBox.addWidget(self._balanceTotalLabel)
+
+        detailRow = QHBoxLayout()
+        detailRow.setSpacing(12)
+        self._balanceMoneyLabel = CaptionLabel("付费 ¥--", balanceWidget)
+        self._balanceFreeLabel = CaptionLabel("积分 ¥--", balanceWidget)
+        for lbl in (self._balanceMoneyLabel, self._balanceFreeLabel):
+            lbl.setStyleSheet("color: #888; font-size: 12px;")
+        detailRow.addWidget(self._balanceMoneyLabel)
+        detailRow.addWidget(self._balanceFreeLabel)
+        detailRow.addStretch()
+        balanceBox.addLayout(detailRow)
+        outerLayout.addLayout(balanceBox)
+
+        outerLayout.addStretch()
         btnQuery = PushButton(FIF.SYNC, "查询", balanceWidget)
         btnQuery.setFixedHeight(30)
         btnQuery.setFixedWidth(80)
         btnQuery.clicked.connect(self._queryBalance)
-        balanceLayout.addWidget(btnQuery)
+        outerLayout.addWidget(btnQuery)
         card.addGroup(FIF.MARKET, "账户余额", "实时查询验证码识别余额", balanceWidget)
 
         # 底部工具栏
@@ -718,21 +729,36 @@ class BigScreenInterface(ScrollArea):
         """后台查询验证码余额并更新显示"""
         key = self._tokenInput.text().strip()
         if not key:
-            self._balanceLabel.setText("请先输入 Key")
+            self._balanceTotalLabel.setText("请先输入 Key")
+            self._balanceTotalLabel.setStyleSheet("font-size: 20px; font-weight: bold; color: #999;")
             return
-        self._balanceLabel.setText("查询中...")
-        self._balanceLabel.setStyleSheet("font-size: 14px; font-weight: bold; color: gray;")
+        self._balanceTotalLabel.setText("查询中...")
+        self._balanceTotalLabel.setStyleSheet("font-size: 20px; font-weight: bold; color: gray;")
 
         worker = _BalanceWorker(key, parent=self)
-        worker.result_ready.connect(self._updateBalanceLabel)
+        worker.result_ready.connect(self._onBalanceResult)
         worker.finished.connect(worker.deleteLater)
         self._balance_worker = worker  # 防止 GC
         worker.start()
 
-    def _updateBalanceLabel(self, text: str, color: str) -> None:
-        """更新余额标签（主线程调用）"""
-        self._balanceLabel.setText(text)
-        self._balanceLabel.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {color};")
+    def _onBalanceResult(self, total: float, money: float, free: float, error: str) -> None:
+        """余额查询结果回调（主线程）"""
+        if error:
+            self._balanceTotalLabel.setText(error)
+            self._balanceTotalLabel.setStyleSheet("font-size: 14px; font-weight: bold; color: #c62828;")
+            self._balanceMoneyLabel.setText("")
+            self._balanceFreeLabel.setText("")
+            return
+        if total > 10:
+            color = "#2e7d32"
+        elif total > 2:
+            color = "#e65100"
+        else:
+            color = "#c62828"
+        self._balanceTotalLabel.setText(f"¥{total:.2f}")
+        self._balanceTotalLabel.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color};")
+        self._balanceMoneyLabel.setText(f"付费 ¥{money:.2f}")
+        self._balanceFreeLabel.setText(f"积分 ¥{free:.2f}")
 
     # ──────────────────────────────────────────────────────
     # 节点表格更新
