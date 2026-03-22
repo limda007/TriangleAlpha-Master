@@ -4,12 +4,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -101,6 +101,7 @@ class AccountInterface(ScrollArea):
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setMinimumSectionSize(120)
         for col in range(1, len(_HEADERS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.table.cellClicked.connect(self._onCellClicked)
@@ -164,11 +165,23 @@ class AccountInterface(ScrollArea):
                     item.setData(Qt.ItemDataRole.UserRole, acc.password)
                 elif col == 3:
                     item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
-                # 状态列着色
+                # 状态列：扁平圆角标签
                 if col == _STATUS_COL:
-                    bg, fg = _STATUS_COLORS.get(text, ("#ffffff", "#333333"))
-                    item.setBackground(QColor(bg))
-                    item.setForeground(QColor(fg))
+                    item.setText("")
+                    item.setData(Qt.ItemDataRole.UserRole, text)
+                    bg, fg = _STATUS_COLORS.get(text, ("#f5f5f5", "#333333"))
+                    tag = QLabel(text)
+                    tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    tag.setStyleSheet(
+                        f"background:{bg}; color:{fg}; border-radius:4px;"
+                        " padding:2px 8px; font-size:12px;"
+                    )
+                    container = QWidget()
+                    lay = QHBoxLayout(container)
+                    lay.setContentsMargins(4, 2, 4, 2)
+                    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    lay.addWidget(tag)
+                    self.table.setCellWidget(row, col, container)
         self.table.setUpdatesEnabled(True)
         self._refreshStats()
         self._applyFilter()
@@ -201,7 +214,7 @@ class AccountInterface(ScrollArea):
         target = status_map.get(status_text)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 4)  # 状态列
-            if target is None or (item and item.text() == target):
+            if target is None or (item and item.data(Qt.ItemDataRole.UserRole) == target):
                 self.table.setRowHidden(row, False)
             else:
                 self.table.setRowHidden(row, True)
@@ -350,7 +363,7 @@ class AccountInterface(ScrollArea):
             machine_item = self.table.item(idx.row(), 5)  # 分配机器列
             if (
                 status_item
-                and status_item.text() == "运行中"
+                and status_item.data(Qt.ItemDataRole.UserRole) == "运行中"
                 and machine_item
                 and machine_item.text()
             ):
