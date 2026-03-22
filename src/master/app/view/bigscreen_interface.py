@@ -470,7 +470,6 @@ class BigScreenInterface(ScrollArea):
         _FILE_BUTTONS = [
             ("提取账号", FIF.COMPLETED, "btnExtract"),
             ("导出所有", FIF.SAVE, "btnExportAll"),
-            ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
             ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
             ("清理单机账号", FIF.REMOVE, "btnCleanAccounts"),
             ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
@@ -500,17 +499,16 @@ class BigScreenInterface(ScrollArea):
         self._actionStack.setCurrentWidget(opPage)
         self._actionPivot.setCurrentItem("opPage")
 
-        # 连接按钮信号（操作: 0-3, 文件: 4-9）
+        # 连接按钮信号（操作: 0-3, 文件: 4-8）
         self._actionBtns[0].clicked.connect(self._oneClickStart)
         self._actionBtns[1].clicked.connect(self._startExeOnAll)
         self._actionBtns[2].clicked.connect(self._stopExeOnAll)
         self._actionBtns[3].clicked.connect(self._rebootAllPC)
         self._actionBtns[4].clicked.connect(self._extractCompleted)
         self._actionBtns[5].clicked.connect(self._exportAll)
-        self._actionBtns[6].clicked.connect(self._sendFileToAll)
-        self._actionBtns[7].clicked.connect(self._deleteFileOnAll)
-        self._actionBtns[8].clicked.connect(self._cleanStandaloneAccounts)
-        self._actionBtns[9].clicked.connect(self._distributeKey)
+        self._actionBtns[6].clicked.connect(self._deleteFileOnAll)
+        self._actionBtns[7].clicked.connect(self._cleanStandaloneAccounts)
+        self._actionBtns[8].clicked.connect(self._distributeKey)
 
         return panel
 
@@ -1090,46 +1088,6 @@ class BigScreenInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
-    def _sendFileToAll(self) -> None:
-        """批量分发文件 — 选择多个文件，覆盖式传输到每个节点的脚本目录"""
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
-        if not paths:
-            return
-        ips, selected = self._getTargetIPs()
-        if not ips:
-            InfoBar.warning(
-                "提示", "没有在线节点",
-                parent=self, position=InfoBarPosition.TOP, duration=2000,
-            )
-            return
-        files_data: list[tuple[str, str]] = []
-        for path in paths:
-            try:
-                raw = Path(path).read_bytes()
-                filename = Path(path).name
-                content_b64 = base64.b64encode(raw).decode("ascii")
-                files_data.append((filename, content_b64))
-            except OSError as e:
-                InfoBar.error(
-                    "读取失败", f"{path}: {e}",
-                    parent=self, position=InfoBarPosition.TOP, duration=5000,
-                )
-                return
-        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
-        if not selected and not self._confirmDangerous(
-            "批量分发文件",
-            f"将向全部 {len(ips)} 个在线节点覆盖写入 {len(files_data)} 个文件，是否继续？",
-        ):
-            return
-        for filename, content_b64 in files_data:
-            self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
-        file_names = ", ".join(Path(p).name for p in paths)
-        self._nm.add_history("分发文件", scope, file_names)
-        InfoBar.success(
-            "已分发", f"{len(files_data)} 个文件已发送到 {scope}",
-            parent=self, position=InfoBarPosition.TOP, duration=3000,
-        )
-
     def _deleteFileOnAll(self) -> None:
         """批量删除文件：弹窗输入文件名列表"""
         dlg = MessageBox("批量删除文件", "输入要删除的文件名（每行一个）", self.window())
@@ -1494,7 +1452,10 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _oneClickStart(self) -> None:
-        """一键分发文件：下发配置到节点"""
+        """一键分发文件：批量选择文件，覆盖式传输到每个节点的脚本目录"""
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
+        if not paths:
+            return
         ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
@@ -1502,31 +1463,31 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        files_data: list[tuple[str, str]] = []
+        for p in paths:
+            try:
+                raw = Path(p).read_bytes()
+                filename = Path(p).name
+                content_b64 = base64.b64encode(raw).decode("ascii")
+                files_data.append((filename, content_b64))
+            except OSError as e:
+                InfoBar.error(
+                    "读取失败", f"{p}: {e}",
+                    parent=self, position=InfoBarPosition.TOP, duration=5000,
+                )
+                return
+        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         if not selected and not self._confirmDangerous(
             "一键分发文件",
-            f"未选中节点，将对全部 {len(ips)} 个在线节点下发配置，是否继续？",
+            f"将向全部 {len(ips)} 个在线节点覆盖写入 {len(files_data)} 个文件，是否继续？",
         ):
             return
-        teammate = "1" if self._cfgTeammate.currentText() == "开启" else "0"
-        weapon = self._cfgWeapon.currentText()
-        level = str(self._cfgLevel.value())
-        loot = str(self._cfgLoot.value())
-        for filename, content in [
-            ("补齐队友配置.txt", teammate),
-            ("武器配置.txt", weapon),
-            ("下号等级.txt", level),
-            ("舔包次数.txt", loot),
-        ]:
-            self._tcp.broadcast(
-                ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|{content}",
-            )
-        scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
-        self._nm.add_history(
-            "一键分发文件", scope,
-            f"队友={teammate} 武器={weapon} 等级={level} 舔包={loot}",
-        )
+        for filename, content_b64 in files_data:
+            self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
+        file_names = ", ".join(Path(p).name for p in paths)
+        self._nm.add_history("一键分发文件", scope, file_names)
         InfoBar.success(
-            "已分发", f"配置已发送到 {scope}",
+            "已分发", f"{len(files_data)} 个文件已发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
