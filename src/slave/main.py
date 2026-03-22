@@ -125,7 +125,7 @@ def main() -> None:
     backend.error_occurred.connect(window.append_log)
 
     backend.start()
-    window.show()
+    # 启动时直接最小化到托盘，不弹出窗口
 
     try:
         exit_code = app.exec()

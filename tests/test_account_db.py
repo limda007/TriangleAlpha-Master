@@ -133,6 +133,48 @@ class TestComplete:
         assert acc.completed_at is not None
 
 
+    def test_update_from_status_zero_level_does_not_overwrite(self, db: AccountDB) -> None:
+        """level=0 不应覆盖已有的非零等级（MAX 防护）"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.update_from_status("VM-01", 15, "5000", "运行中")
+        # 模拟 IPC 超时后发送零值
+        db.update_from_status("VM-01", 0, "5000", "运行中")
+        acc = db.get_all_accounts()[0]
+        assert acc.level == 15  # 保持原值，不被零覆盖
+
+    def test_update_from_status_zero_jinbi_does_not_overwrite(self, db: AccountDB) -> None:
+        """jin_bi='0' 不应覆盖已有的非零金币"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.update_from_status("VM-01", 15, "5000", "运行中")
+        # 模拟脚本停止后零值
+        db.update_from_status("VM-01", 18, "0", "运行中")
+        acc = db.get_all_accounts()[0]
+        assert acc.jin_bi == "5000"  # 保持原值
+        assert acc.level == 18  # level 可以增长
+
+    def test_update_from_status_level_only_increases(self, db: AccountDB) -> None:
+        """等级只增不减（MAX 语义）"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.update_from_status("VM-01", 18, "50000", "运行中")
+        db.update_from_status("VM-01", 5, "60000", "运行中")
+        acc = db.get_all_accounts()[0]
+        assert acc.level == 18  # MAX(18, 5) = 18
+        assert acc.jin_bi == "60000"  # jin_bi 正常更新
+
+    def test_update_from_status_auto_bind_zero_protection(self, db: AccountDB) -> None:
+        """自动绑定路径也应有零值保护"""
+        db.import_fresh("u1----p1")
+        db.update_from_status("VM-01", 10, "3000", "运行中", current_account="u1")
+        # 后续零值不覆盖
+        db.update_from_status("VM-01", 0, "0", "运行中", current_account="u1")
+        acc = db.get_all_accounts()[0]
+        assert acc.level == 10
+        assert acc.jin_bi == "3000"
+
+
 class TestRelease:
     def test_release_basic(self, db: AccountDB) -> None:
         db.import_fresh("u1----p1")

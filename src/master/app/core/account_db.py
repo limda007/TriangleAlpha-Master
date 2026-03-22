@@ -201,19 +201,41 @@ class AccountDB(QObject):
         """slave STATUS 上报 → 更新绑定账号的等级/金币，已完成则自动流转。
 
         若 assigned_machine 找不到对应账号但 current_account 匹配，自动绑定。
+
+        防护措施：
+        - level 使用 MAX 防止等级回退（等级只会增长）
+        - jin_bi 仅在新值非零时更新，防止 IPC 超时/脚本停止导致零值覆盖
         """
-        changed = self._conn.execute(
-            "UPDATE accounts SET level=?, jin_bi=? "
-            "WHERE status='运行中' AND assigned_machine=?",
-            (level, jin_bi, machine_name),
-        ).rowcount
+        # 零值保护：level 只增不减，jin_bi 零值不覆盖
+        if jin_bi and jin_bi != "0":
+            changed = self._conn.execute(
+                "UPDATE accounts SET level=MAX(level, ?), jin_bi=? "
+                "WHERE status='运行中' AND assigned_machine=?",
+                (level, jin_bi, machine_name),
+            ).rowcount
+        else:
+            changed = self._conn.execute(
+                "UPDATE accounts SET level=MAX(level, ?) "
+                "WHERE status='运行中' AND assigned_machine=?",
+                (level, machine_name),
+            ).rowcount
         if not changed and current_account:
             # 账号未经 allocate，但 TestDemo 已在使用 → 自动绑定
-            changed = self._conn.execute(
-                "UPDATE accounts SET level=?, jin_bi=?, status='运行中', assigned_machine=? "
-                "WHERE username=? AND status IN ('空闲中', '运行中')",
-                (level, jin_bi, machine_name, current_account),
-            ).rowcount
+            # 自动绑定时也应用零值保护
+            if jin_bi and jin_bi != "0":
+                changed = self._conn.execute(
+                    "UPDATE accounts SET level=MAX(level, ?), jin_bi=?, "
+                    "status='运行中', assigned_machine=? "
+                    "WHERE username=? AND status IN ('空闲中', '运行中')",
+                    (level, jin_bi, machine_name, current_account),
+                ).rowcount
+            else:
+                changed = self._conn.execute(
+                    "UPDATE accounts SET level=MAX(level, ?), "
+                    "status='运行中', assigned_machine=? "
+                    "WHERE username=? AND status IN ('空闲中', '运行中')",
+                    (level, machine_name, current_account),
+                ).rowcount
         if not changed:
             return
         if state == "已完成":
