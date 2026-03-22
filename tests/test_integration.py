@@ -89,6 +89,7 @@ class TestProtocolRoundTrip:
         assert msg.level == 18
         assert msg.jin_bi == "12450"
         assert msg.elapsed == "0"  # 默认 elapsed
+        assert msg.status_text == ""  # 无 status_text 时为空
 
     def test_status_roundtrip_with_elapsed(self):
         raw = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "360")
@@ -96,6 +97,16 @@ class TestProtocolRoundTrip:
         assert msg.type == UdpMessageType.STATUS
         assert msg.level == 18
         assert msg.elapsed == "360"
+        assert msg.status_text == ""
+
+    def test_status_roundtrip_with_status_text(self):
+        raw = build_udp_status("VM-01", "运行中", 18, "12450", "acc1", "360", "等待匹配")
+        msg = parse_udp_message(raw)
+        assert msg.type == UdpMessageType.STATUS
+        assert msg.level == 18
+        assert msg.desc == "acc1"
+        assert msg.elapsed == "360"
+        assert msg.status_text == "等待匹配"
 
     def test_tcp_update_txt_roundtrip(self):
         import base64

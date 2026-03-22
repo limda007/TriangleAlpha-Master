@@ -74,9 +74,9 @@ class HeartbeatService:
 
     def send_status(self, state: str, level: int = 0,
                     jin_bi: str = "0", desc: str = "",
-                    elapsed: str = "0") -> None:
+                    elapsed: str = "0", status_text: str = "") -> None:
         """发送 STATUS 消息到 master（独立阻塞 UDP socket，不复用心跳 async socket）"""
-        msg = build_udp_status(self._machine_name, state, level, jin_bi, desc, elapsed)
+        msg = build_udp_status(self._machine_name, state, level, jin_bi, desc, elapsed, status_text)
         self._send_udp(msg)
 
     def send_account_sync(self, payload_b64: str) -> None:

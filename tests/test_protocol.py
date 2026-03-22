@@ -51,9 +51,11 @@ class TestBuildUdp:
         assert build_udp_online("VM-01", "Admin") == "ONLINE|VM-01|Admin"
 
     def test_build_status(self):
-        assert build_udp_status("VM-01", "升级中", 18, "12450", "正在升级") == "STATUS|VM-01|升级中|18|12450|正在升级|0"
+        assert build_udp_status("VM-01", "升级中", 18, "12450", "正在升级") == "STATUS|VM-01|升级中|18|12450|正在升级|0|"
         result = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120")
-        assert result == "STATUS|VM-01|升级中|18|12450|正在升级|120"
+        assert result == "STATUS|VM-01|升级中|18|12450|正在升级|120|"
+        result_st = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120", "等待匹配")
+        assert result_st == "STATUS|VM-01|升级中|18|12450|正在升级|120|等待匹配"
 
 
 class TestBuildTcp:

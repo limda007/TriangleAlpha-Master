@@ -63,6 +63,7 @@ class UdpMessage:
     jin_bi: str = "0"
     desc: str = ""
     elapsed: str = "0"  # 运行时间（分钟或秒，由 TestDemo 上报）
+    status_text: str = ""  # IPC 原始状态文本（如 "等待匹配"/"正在对局"）
     cpu_percent: float = 0.0
     mem_percent: float = 0.0
     slave_version: str = ""
@@ -93,6 +94,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 jin_bi=parts[4],
                 desc=parts[5],
                 elapsed=parts[6] if len(parts) >= 7 else "0",
+                status_text=parts[7] if len(parts) >= 8 else "",
             )
         case "EXT_ONLINE" if len(parts) >= 7:
             return UdpMessage(
@@ -143,8 +145,11 @@ def build_udp_offline(machine_name: str) -> str:
     return f"OFFLINE|{machine_name}"
 
 
-def build_udp_status(machine_name: str, state: str, level: int, jin_bi: str, desc: str, elapsed: str = "0") -> str:
-    return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}|{elapsed}"
+def build_udp_status(
+    machine_name: str, state: str, level: int, jin_bi: str,
+    desc: str, elapsed: str = "0", status_text: str = "",
+) -> str:
+    return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}|{elapsed}|{status_text}"
 
 
 def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:

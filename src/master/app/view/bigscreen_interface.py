@@ -359,7 +359,7 @@ class BigScreenInterface(ScrollArea):
         panel = QFrame(self)
         panel.setObjectName("accountPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setContentsMargins(14, 10, 24, 10)
         layout.setSpacing(8)
 
         # 标题行带图标 + 上传按钮
@@ -835,7 +835,7 @@ class BigScreenInterface(ScrollArea):
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
             self._format_elapsed(node.elapsed),
-            node.game_state if node.game_state else node.status,
+            node.status_text or node.game_state or node.status,
             f"{node.cpu_percent:.0f}%",
             f"{node.mem_percent:.0f}%",
             node.slave_version or "--",

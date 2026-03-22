@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
@@ -71,7 +72,8 @@ class MainWindow(FluentWindow):
         self.nodeManager.node_online.connect(self._onNodeReconnect)
 
         # 节点上报时自动补全缺失的验证码 Key
-        self._tokenPushedNodes: set[str] = set()
+        self._tokenPushedAt: dict[str, float] = {}  # machine_name → monotonic timestamp
+        self._TOKEN_PUSH_RETRY_SEC = 30  # 推送后 N 秒内 key 仍不匹配则允许重试
         self.nodeManager.node_updated.connect(self._autoFixTokenKey)
 
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
@@ -198,16 +200,17 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         if not node or node.status in ("离线", "断连"):
             return
-        # Key 一致，从已推送集合中移除（支持 master 换 key 后重新推送）
+        # Key 一致，清除推送记录（支持 master 换 key 后重新推送）
         if node.token_key == master_key:
-            self._tokenPushedNodes.discard(machine_name)
+            self._tokenPushedAt.pop(machine_name, None)
             return
-        # 已经推送过且节点未重启，跳过避免重复推送
-        if machine_name in self._tokenPushedNodes:
+        # 推送过但未超时 → 跳过；超时 → 允许重试
+        pushed_at = self._tokenPushedAt.get(machine_name)
+        if pushed_at is not None and time.monotonic() - pushed_at < self._TOKEN_PUSH_RETRY_SEC:
             return
         # 自动下发
         self.tcpCommander.send(node.ip, TcpCommand.EXT_SET_CONFIG, f"token.txt|{master_key}")
-        self._tokenPushedNodes.add(machine_name)
+        self._tokenPushedAt[machine_name] = time.monotonic()
 
     def _syncAccountFromNode(self, machine_name: str) -> None:
         """slave STATUS 上报 → 同步等级/金币/状态到 AccountDB"""

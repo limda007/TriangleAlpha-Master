@@ -25,6 +25,7 @@ class RuntimeStatus:
     jin_bi: str = "0"
     current_account: str = ""
     elapsed: str = "0"
+    status_text: str = ""  # IPC 原始状态文本（如 "等待匹配"/"正在对局"）
 
 
 class SlaveStateStore:

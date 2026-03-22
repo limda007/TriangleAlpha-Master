@@ -204,6 +204,9 @@ class CommandHandler:
             logger.error("配置格式错误，需要 filename|content")
             return ""
         filename = filename.strip()
+        if filename not in self._CONFIG_WHITELIST:
+            logger.warning("拒绝写入非白名单文件: %s", filename)
+            return ""
         fpath = self._safe_path(filename)
         if fpath is None:
             return ""

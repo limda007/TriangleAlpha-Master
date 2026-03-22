@@ -33,6 +33,7 @@ class NodeInfo:
     level_threshold: str = ""
     loot_count: str = ""
     token_key: str = ""    # slave 端 token.txt 内容
+    status_text: str = ""  # IPC 原始状态文本（如 "等待匹配"/"正在对局"）
     last_seen: datetime = field(default_factory=datetime.now)
     last_status_update: datetime = field(default_factory=datetime.now)
     game_state: str = ""  # TestDemo 上报的游戏状态（运行中/已完成/脚本已停止）

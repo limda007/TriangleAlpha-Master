@@ -200,6 +200,7 @@ class SlaveBackend(QThread):
                         snapshot.jin_bi,
                         snapshot.current_account,
                         snapshot.elapsed,
+                        snapshot.status_text,
                     )
                 except Exception:
                     logger.exception("周期性状态上报失败")
@@ -215,24 +216,28 @@ class SlaveBackend(QThread):
         if ipc_data is not None and ipc_age < IPC_TIMEOUT:
             # 缓存最新 IPC 数据，供 IPC 超时时沿用
             self._last_ipc_jin_bi = ipc_data.get("jinbi", "0")
+            raw_status = ipc_data.get("status_text", "")
             level_raw = ipc_data.get("level", "0")
             return RuntimeStatus(
-                state=self._map_ipc_status(ipc_data.get("status_text", "")),
+                state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
                 current_account=ipc_data.get("account", ""),
                 elapsed=ipc_data.get("elapsed", default_elapsed),
+                status_text=raw_status,
             )
 
         # ── IPC 刚超时但有缓存：沿用最后 IPC 数据，避免文件回退导致金币跳变 ──
         if ipc_data is not None and self._last_ipc_jin_bi != "0":
+            raw_status = ipc_data.get("status_text", "")
             level_raw = ipc_data.get("level", "0")
             return RuntimeStatus(
-                state=self._map_ipc_status(ipc_data.get("status_text", "")),
+                state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
                 current_account=ipc_data.get("account", ""),
                 elapsed=ipc_data.get("elapsed", default_elapsed),
+                status_text=raw_status,
             )
 
         # ── 文件兜底：读 runtime_status.json ──

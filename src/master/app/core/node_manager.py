@@ -211,11 +211,13 @@ class NodeManager(QObject):
         # 写入 game_state 而非 status（status 由心跳和超时管理）
         if state == GameState.SCRIPT_STOPPED:
             node.game_state = ""
+            node.status_text = ""
             node.elapsed = "0"
             # 保留 level/jin_bi/current_account 作为最后已知值，
             # 避免大屏显示清空；DB 侧由 _syncAccountFromNode 守卫
         else:
             node.game_state = state if state else node.game_state
+            node.status_text = msg.status_text if msg.status_text else node.status_text
             if msg.level:
                 node.level = msg.level
             if msg.jin_bi and msg.jin_bi != "0":
