@@ -324,8 +324,17 @@ class AccountDB(QObject):
                 updated += 1
                 continue
 
-            # 运行中账号的 level/jin_bi 由 STATUS 实时更新，SYNC 不覆盖
+            # 运行中账号：检查是否已达到下号等级（补偿 master 离线期间错过的完成上报）
             if existing["status"] == "运行中":
+                if (not is_active and level_threshold > 0
+                        and level >= level_threshold):
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self._conn.execute(
+                        "UPDATE accounts SET status='已完成', level=?, jin_bi=?, "
+                        "completed_at=? WHERE id = ?",
+                        (level, jin_bi, now, existing["id"]),
+                    )
+                    updated += 1
                 continue
 
             self._conn.execute(

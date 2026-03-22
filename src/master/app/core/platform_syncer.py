@@ -76,7 +76,7 @@ class _SyncWorker(QThread):
             self._client_cfg.access_token,
             self._client_cfg.refresh_token,
         )
-        taken = [item.get("username", "") for item in items if item.get("username")]
+        taken = [item.get("steam_account", "") for item in items if item.get("steam_account")]
         if taken:
             self.poll_done.emit(taken)
             logger.info("平台轮询：%d 个账号已被取号", len(taken))
@@ -171,9 +171,15 @@ class PlatformSyncer(QObject):
     def stop(self) -> None:
         """停止所有定时器和工作线程"""
         self._stop_timers()
-        if self._worker and self._worker.isRunning():
-            self._worker.quit()
-            self._worker.wait(3000)
+        w = self._worker
+        if w is not None:
+            try:
+                if w.isRunning():
+                    w.quit()
+                    w.wait(3000)
+            except RuntimeError:
+                pass
+            self._worker = None
 
     def _stop_timers(self) -> None:
         self._poll_timer.stop()
@@ -208,8 +214,8 @@ class PlatformSyncer(QObject):
         pending = self._db.get_completed_not_uploaded()
         if not pending:
             return
-        # 构造上传文本：username----password
-        lines = [f"{a.username}----{a.password}" for a in pending]
+        # 构造上传文本：steam----steam密码----邮箱----邮箱密码----备注
+        lines = [a.to_line() for a in pending]
         text = "\n".join(lines)
 
         self._worker = _SyncWorker(
@@ -220,7 +226,7 @@ class PlatformSyncer(QObject):
         self._worker.upload_done.connect(self._on_upload_done)
         self._worker.tokens_updated.connect(self._on_tokens_updated)
         self._worker.error_occurred.connect(self._on_worker_error)
-        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.finished.connect(self._cleanup_worker)
         self._worker.start()
 
     def _on_upload_done(self, usernames: list[str]) -> None:
@@ -248,7 +254,7 @@ class PlatformSyncer(QObject):
         self._worker.poll_done.connect(self._on_poll_done)
         self._worker.tokens_updated.connect(self._on_tokens_updated)
         self._worker.error_occurred.connect(self._on_worker_error)
-        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.finished.connect(self._cleanup_worker)
         self._worker.start()
 
     def _on_poll_done(self, usernames: list[str]) -> None:
@@ -256,6 +262,13 @@ class PlatformSyncer(QObject):
         self._db.mark_taken_by_platform(usernames)
 
     # ── Token / 错误处理 ──
+
+    def _cleanup_worker(self) -> None:
+        """Worker 完成后清理引用，防止访问已销毁的 C++ 对象"""
+        w = self._worker
+        self._worker = None
+        if w is not None:
+            w.deleteLater()
 
     def _on_tokens_updated(self, at: str, rt: str) -> None:
         """Token 更新 → 持久化到 DB（主线程）"""

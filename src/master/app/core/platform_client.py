@@ -36,7 +36,7 @@ class PlatformClient:
             raise PlatformAPIError("登录失败：缺少 API 地址/用户名/密码")
         try:
             resp = client.post(
-                f"{self.base_url}/api/v1/login",
+                f"{self.base_url}/api/v1/auth/login",
                 json={"username": self.username, "password": self.password},
                 timeout=self._timeout,
             )
@@ -55,7 +55,7 @@ class PlatformClient:
             raise PlatformAPIError("刷新令牌失败：无 refresh_token")
         try:
             resp = client.post(
-                f"{self.base_url}/api/v1/refresh",
+                f"{self.base_url}/api/v1/auth/refresh",
                 json={"refresh_token": self.refresh_token},
                 timeout=self._timeout,
             )
@@ -131,18 +131,29 @@ class PlatformClient:
     def query_accounts(
         self, client: httpx.Client, group_name: str,
     ) -> list[dict]:
-        """查询平台已取号的账号列表"""
-        resp = self._retry_on_401(
-            client, "GET",
-            f"{self.base_url}/api/v1/producer/accounts",
-            params={"group_name": group_name, "status": "taken"},
-        )
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise PlatformAPIError(f"查询失败({resp.status_code})：{resp.text}") from e
-        data = resp.json()
-        # 兼容 {items: [...]} 和 [...] 两种格式
-        if isinstance(data, list):
-            return data
-        return data.get("items", [])
+        """查询平台已取号的账号列表（自动翻页）"""
+        all_items: list[dict] = []
+        page = 1
+        page_size = 200
+        while True:
+            resp = self._retry_on_401(
+                client, "GET",
+                f"{self.base_url}/api/v1/producer/accounts",
+                params={
+                    "group_name": group_name,
+                    "status_filter": "taken",
+                    "page": page,
+                    "page_size": page_size,
+                },
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise PlatformAPIError(f"查询失败({resp.status_code})：{resp.text}") from e
+            data = resp.json()
+            items = data if isinstance(data, list) else data.get("items", [])
+            all_items.extend(items)
+            if len(items) < page_size:
+                break
+            page += 1
+        return all_items
