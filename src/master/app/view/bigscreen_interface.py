@@ -692,8 +692,8 @@ class BigScreenInterface(ScrollArea):
                 req = urllib.request.Request(url, method="GET")
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                if data.get("success"):
-                    info = data["data"]
+                if data.get("success") or data.get("Success"):
+                    info = data.get("data") or data.get("Data") or {}
                     total = float(info.get("totalBalance", 0))
                     money = float(info.get("money", 0))
                     free = float(info.get("freeMoney", 0))
@@ -709,7 +709,7 @@ class BigScreenInterface(ScrollArea):
                         text = f"{user}  {text}"
                     QTimer.singleShot(0, lambda: self._updateBalanceLabel(text, color))
                 else:
-                    err = data.get("error", "未知错误")
+                    err = data.get("error") or data.get("Error") or "未知错误"
                     QTimer.singleShot(0, lambda _err=err: self._updateBalanceLabel(f"查询失败: {_err}", "#c62828"))
             except Exception as exc:
                 QTimer.singleShot(0, lambda _exc=exc: self._updateBalanceLabel(f"网络异常: {_exc}", "#c62828"))
