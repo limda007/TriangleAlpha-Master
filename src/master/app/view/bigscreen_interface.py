@@ -1,6 +1,10 @@
 """大屏模式页面 — 节点表格 + 账号池 + 操作按钮，一屏总览"""
 from __future__ import annotations
 
+import json
+import threading
+import urllib.error
+import urllib.request
 from datetime import datetime
 
 from PyQt6.QtCore import QSize, Qt, QTimer
@@ -551,7 +555,7 @@ class BigScreenInterface(ScrollArea):
         return cfgPage
 
     def _buildTokenPage(self) -> QWidget:
-        """验证码页：API Key 输入 + 持久化 + 一键下发到 token.txt"""
+        """验证码页：API Key 输入 + 余额查询 + 持久化 + 一键下发到 token.txt"""
         page = QWidget()
         page.setObjectName("tokenPage")
         layout = QVBoxLayout(page)
@@ -579,6 +583,21 @@ class BigScreenInterface(ScrollArea):
             self._tokenInput.setText(saved_key)
         card.addGroup(FIF.FINGERPRINT, "API Key", "充值后复制 Key 粘贴到此处", self._tokenInput)
 
+        # 余额显示 + 查询按钮
+        balanceWidget = QWidget(page)
+        balanceLayout = QHBoxLayout(balanceWidget)
+        balanceLayout.setContentsMargins(0, 0, 0, 0)
+        balanceLayout.setSpacing(8)
+        self._balanceLabel = CaptionLabel("--", balanceWidget)
+        self._balanceLabel.setStyleSheet("font-size: 14px; font-weight: bold;")
+        balanceLayout.addWidget(self._balanceLabel)
+        btnQuery = PushButton(FIF.SYNC, "查询", balanceWidget)
+        btnQuery.setFixedHeight(30)
+        btnQuery.setFixedWidth(80)
+        btnQuery.clicked.connect(self._queryBalance)
+        balanceLayout.addWidget(btnQuery)
+        card.addGroup(FIF.MARKET, "账户余额", "实时查询验证码识别余额", balanceWidget)
+
         # 底部工具栏
         bottomLayout = QHBoxLayout()
         bottomLayout.setContentsMargins(24, 15, 24, 20)
@@ -602,6 +621,11 @@ class BigScreenInterface(ScrollArea):
 
         layout.addWidget(card)
         layout.addStretch()
+
+        # 有 Key 时自动查询余额
+        if saved_key:
+            QTimer.singleShot(500, self._queryBalance)
+
         return page
 
     def _saveApiKey(self) -> None:
@@ -618,6 +642,8 @@ class BigScreenInterface(ScrollArea):
             "已保存", "API Key 已保存到本地配置",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
+        # 保存后自动查询余额
+        self._queryBalance()
 
     def _pushTokenToNodes(self) -> None:
         """保存 API Key 并下发到选中/全部在线节点的 token.txt"""
@@ -650,6 +676,50 @@ class BigScreenInterface(ScrollArea):
             "已下发", f"API Key 已保存并发送到 {scope}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
+
+    def _queryBalance(self) -> None:
+        """后台查询验证码余额并更新显示"""
+        key = self._tokenInput.text().strip()
+        if not key:
+            self._balanceLabel.setText("请先输入 Key")
+            return
+        self._balanceLabel.setText("查询中...")
+        self._balanceLabel.setStyleSheet("font-size: 14px; font-weight: bold; color: gray;")
+
+        def _fetch() -> None:
+            try:
+                url = f"http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance?keyCode={key}"
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                if data.get("success"):
+                    info = data["data"]
+                    total = float(info.get("totalBalance", 0))
+                    money = float(info.get("money", 0))
+                    free = float(info.get("freeMoney", 0))
+                    user = info.get("userName", "")
+                    if total > 10:
+                        color = "#2e7d32"  # 绿色
+                    elif total > 2:
+                        color = "#e65100"  # 橙色
+                    else:
+                        color = "#c62828"  # 红色
+                    text = f"¥{total:.2f}（付费 ¥{money:.2f} + 积分 ¥{free:.2f}）"
+                    if user:
+                        text = f"{user}  {text}"
+                    QTimer.singleShot(0, lambda: self._updateBalanceLabel(text, color))
+                else:
+                    err = data.get("error", "未知错误")
+                    QTimer.singleShot(0, lambda _err=err: self._updateBalanceLabel(f"查询失败: {_err}", "#c62828"))
+            except Exception as exc:
+                QTimer.singleShot(0, lambda _exc=exc: self._updateBalanceLabel(f"网络异常: {_exc}", "#c62828"))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _updateBalanceLabel(self, text: str, color: str) -> None:
+        """更新余额标签（主线程调用）"""
+        self._balanceLabel.setText(text)
+        self._balanceLabel.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {color};")
 
     # ──────────────────────────────────────────────────────
     # 节点表格更新
