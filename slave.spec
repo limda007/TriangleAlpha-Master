@@ -67,6 +67,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('src/slave/resource', 'slave/resource'),
+        ('pyproject.toml', '.'),
     ],
     hiddenimports=[
         'psutil',

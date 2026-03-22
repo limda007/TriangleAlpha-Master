@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from slave.heartbeat import SLAVE_VERSION
 from slave.runtime_paths import RESOURCE_DIR
 
 _MAX_LOG_LINES = 200
@@ -51,7 +52,7 @@ class SlaveWindow(QWidget):
     # ── UI 构建 ──────────────────────────────────────────
 
     def _init_ui(self) -> None:
-        self.setWindowTitle(f"TA-Slave | {self._machine_name}")
+        self.setWindowTitle(f"TA-Slave v{SLAVE_VERSION} | {self._machine_name}")
         self.setFixedSize(420, 380)
 
         # 强制背景填充，修复 PyInstaller onefile 渲染空白
@@ -66,7 +67,7 @@ class SlaveWindow(QWidget):
         layout.setSpacing(5)
 
         # 标题行
-        title = QLabel(f"<b>TA-Slave</b> | {self._machine_name}")
+        title = QLabel(f"<b>TA-Slave</b> v{SLAVE_VERSION} | {self._machine_name}")
         title.setStyleSheet("font-size: 14px; color: #111;")
         layout.addWidget(title)
 
