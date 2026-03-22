@@ -286,6 +286,15 @@ wheels = [
 ]
 
 [[package]]
+name = "markdown"
+version = "3.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/f4/69fa6ed85ae003c2378ffa8f6d2e3234662abd02c10d216c0ba96081a238/markdown-3.10.2.tar.gz", hash = "sha256:994d51325d25ad8aa7ce4ebaec003febcce822c3f8c911e3b17c52f7f589f950", size = 368805, upload-time = "2026-02-09T14:57:26.942Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/1f/77fa3081e4f66ca3576c896ae5d31c3002ac6607f9747d2e3aa49227e464/markdown-3.10.2-py3-none-any.whl", hash = "sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36", size = 108180, upload-time = "2026-02-09T14:57:25.787Z" },
+]
+
+[[package]]
 name = "mypy"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3390,10 +3399,11 @@ wheels = [
 
 [[package]]
 name = "triangle-alpha-master"
-version = "1.0.15"
+version = "1.0.18"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "markdown" },
     { name = "psutil" },
     { name = "pyqt6" },
     { name = "pyqt6-fluent-widgets" },
@@ -3407,11 +3417,13 @@ dev = [
     { name = "pyinstaller" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "types-markdown" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "markdown", specifier = ">=3.5" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pyqt6", specifier = ">=6.7" },
     { name = "pyqt6-fluent-widgets", specifier = ">=1.7.0" },
@@ -3425,6 +3437,16 @@ dev = [
     { name = "pyinstaller", specifier = ">=6.0" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "types-markdown", specifier = ">=3.10.2.20260211" },
+]
+
+[[package]]
+name = "types-markdown"
+version = "3.10.2.20260211"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/2e/35b30a09f6ee8a69142408d3ceb248c4454aa638c0a414d8704a3ef79563/types_markdown-3.10.2.20260211.tar.gz", hash = "sha256:66164310f88c11a58c6c706094c6f8c537c418e3525d33b76276a5fbd66b01ce", size = 19768, upload-time = "2026-02-11T04:19:29.497Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/c9/659fa2df04b232b0bfcd05d2418e683080e91ec68f636f3c0a5a267350e7/types_markdown-3.10.2.20260211-py3-none-any.whl", hash = "sha256:2d94d08587e3738203b3c4479c449845112b171abe8b5cadc9b0c12fcf3e99da", size = 25854, upload-time = "2026-02-11T04:19:28.647Z" },
 ]
 
 [[package]]

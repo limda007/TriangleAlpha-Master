@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     level            INTEGER NOT NULL DEFAULT 0,
     jin_bi           TEXT    NOT NULL DEFAULT '0',
     completed_at     TEXT    DEFAULT NULL,
+    uploaded_at      TEXT    DEFAULT NULL,
     created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -69,6 +70,8 @@ class AccountDB(QObject):
         self._conn.commit()
         # 迁移：修正旧版状态值
         self._migrate_legacy_status()
+        # 迁移：添加 uploaded_at 列
+        self._ensure_uploaded_at_column()
         # 缓存计数
         self._total = 0
         self._available = 0
@@ -355,6 +358,46 @@ class AccountDB(QObject):
 
     # ── 导出 ───────────────────────────────────────────────
 
+    def get_completed_not_uploaded(self) -> list[AccountInfo]:
+        """查询已完成但未上传到平台的账号"""
+        cur = self._conn.execute(
+            "SELECT * FROM accounts WHERE status='已完成' AND uploaded_at IS NULL "
+            "ORDER BY id",
+        )
+        return [self._row_to_info(r) for r in cur.fetchall()]
+
+    def mark_uploaded(self, usernames: list[str]) -> int:
+        """标记账号已上传到平台（批量，事务内）"""
+        if not usernames:
+            return 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        total = 0
+        for username in usernames:
+            total += self._conn.execute(
+                "UPDATE accounts SET uploaded_at=? "
+                "WHERE username=? AND status='已完成' AND uploaded_at IS NULL",
+                (now, username),
+            ).rowcount
+        self._conn.commit()
+        return total
+
+    def mark_taken_by_platform(self, usernames: list[str]) -> int:
+        """平台确认账号已被取号 → 本地状态流转为 '已取号'"""
+        if not usernames:
+            return 0
+        total = 0
+        for username in usernames:
+            total += self._conn.execute(
+                "UPDATE accounts SET status='已取号' "
+                "WHERE username=? AND status='已完成'",
+                (username,),
+            ).rowcount
+        if total:
+            self._conn.commit()
+            self._refresh_counts()
+            self.pool_changed.emit()
+        return total
+
     def export_completed(self, mark_fetched: bool = False) -> str:
         """导出已完成账号，对齐原版 9 字段格式（含表头）
 
@@ -422,6 +465,16 @@ class AccountDB(QObject):
 
     # ── 内部方法 ───────────────────────────────────────────
 
+    def _ensure_uploaded_at_column(self) -> None:
+        """迁移：为已有数据库添加 uploaded_at 列"""
+        cur = self._conn.execute("PRAGMA table_info(accounts)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "uploaded_at" not in columns:
+            self._conn.execute(
+                "ALTER TABLE accounts ADD COLUMN uploaded_at TEXT DEFAULT NULL"
+            )
+            self._conn.commit()
+
     def _migrate_legacy_status(self) -> None:
         """修正旧版数据库中的状态值和 CHECK 约束。"""
         if self._schema_requires_rebuild():
@@ -461,6 +514,7 @@ class AccountDB(QObject):
                 level            INTEGER NOT NULL DEFAULT 0,
                 jin_bi           TEXT    NOT NULL DEFAULT '0',
                 completed_at     TEXT    DEFAULT NULL,
+                uploaded_at      TEXT    DEFAULT NULL,
                 created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
                 updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
             );

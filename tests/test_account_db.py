@@ -530,3 +530,119 @@ class TestCounts:
         db.release("VM-02")
         assert db.available_count == 2
         assert db.in_use_count == 0
+
+
+class TestPlatformUpload:
+    """平台上传相关方法测试"""
+
+    def test_uploaded_at_column_exists(self, db: AccountDB) -> None:
+        """新建数据库应含 uploaded_at 列"""
+        cur = db._conn.execute("PRAGMA table_info(accounts)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "uploaded_at" in columns
+
+    def test_uploaded_at_migration(self, tmp_path: Path) -> None:
+        """旧数据库打开后自动添加 uploaded_at 列"""
+        db_path = tmp_path / "old.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE accounts (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                username         TEXT    NOT NULL UNIQUE,
+                password         TEXT    NOT NULL DEFAULT '',
+                bind_email       TEXT    NOT NULL DEFAULT '',
+                bind_email_pwd   TEXT    NOT NULL DEFAULT '',
+                notes            TEXT    NOT NULL DEFAULT '',
+                status           TEXT    NOT NULL DEFAULT '空闲中'
+                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
+                assigned_machine TEXT    NOT NULL DEFAULT '',
+                level            INTEGER NOT NULL DEFAULT 0,
+                jin_bi           TEXT    NOT NULL DEFAULT '0',
+                completed_at     TEXT    DEFAULT NULL,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+            CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
+        """)
+        conn.execute("INSERT INTO accounts (username, password) VALUES ('u1', 'p1')")
+        conn.commit()
+        conn.close()
+
+        db = AccountDB(db_path)
+        try:
+            cur = db._conn.execute("PRAGMA table_info(accounts)")
+            columns = {row[1] for row in cur.fetchall()}
+            assert "uploaded_at" in columns
+            # 已有数据未受影响
+            assert db.total_count == 1
+        finally:
+            db.close()
+
+    def test_get_completed_not_uploaded(self, db: AccountDB) -> None:
+        """已完成且未上传的账号应被查出"""
+        db.import_fresh("u1----p1\nu2----p2\nu3----p3")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        db.allocate("VM-02")
+        db.complete("VM-02", level=20)
+        pending = db.get_completed_not_uploaded()
+        assert len(pending) == 2
+        assert {a.username for a in pending} == {"u1", "u2"}
+
+    def test_get_completed_not_uploaded_excludes_uploaded(self, db: AccountDB) -> None:
+        """已标记上传的账号不在结果中"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        db.allocate("VM-02")
+        db.complete("VM-02", level=20)
+        db.mark_uploaded(["u1"])
+        pending = db.get_completed_not_uploaded()
+        assert len(pending) == 1
+        assert pending[0].username == "u2"
+
+    def test_mark_uploaded(self, db: AccountDB) -> None:
+        """mark_uploaded 设置 uploaded_at 时间戳"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        count = db.mark_uploaded(["u1"])
+        assert count == 1
+        row = db._conn.execute(
+            "SELECT uploaded_at FROM accounts WHERE username='u1'"
+        ).fetchone()
+        assert row[0] is not None
+
+    def test_mark_uploaded_idempotent(self, db: AccountDB) -> None:
+        """重复上传同一个账号不会重复标记"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        db.mark_uploaded(["u1"])
+        count = db.mark_uploaded(["u1"])
+        assert count == 0
+
+    def test_mark_uploaded_empty_list(self, db: AccountDB) -> None:
+        """空列表不操作"""
+        assert db.mark_uploaded([]) == 0
+
+    def test_mark_taken_by_platform(self, db: AccountDB) -> None:
+        """平台取号 → 状态流转为已取号"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        db.allocate("VM-02")
+        db.complete("VM-02", level=20)
+        count = db.mark_taken_by_platform(["u1"])
+        assert count == 1
+        accs = {a.username: a for a in db.get_all_accounts()}
+        assert accs["u1"].status == AccountStatus.FETCHED
+        assert accs["u2"].status == AccountStatus.COMPLETED
+
+    def test_mark_taken_only_affects_completed(self, db: AccountDB) -> None:
+        """mark_taken_by_platform 只影响已完成状态的账号"""
+        db.import_fresh("u1----p1")
+        # u1 是空闲中
+        count = db.mark_taken_by_platform(["u1"])
+        assert count == 0
+        assert db.get_all_accounts()[0].status == AccountStatus.IDLE
