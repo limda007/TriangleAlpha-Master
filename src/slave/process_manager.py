@@ -13,7 +13,7 @@ _KILL_TARGETS = [
     "TriangleAlpha.Launcher",
     "TestDemo",
     "RegisterDmSoftConsoleApp",
-    "OCR",
+    # "OCR" — OCR.exe 常驻，不杀（Qt 重启不稳定）
     "steam",
     "steamwebhelper",
     "steamerrorreporter",
@@ -28,7 +28,7 @@ _KILL_TARGETS = [
 
 # 关键词匹配：进程名包含以下字符串即杀死
 _KILL_KEYWORDS = [
-    "rapidocr",
+    # "rapidocr" — RapidOCR-json.exe 是 OCR 子进程，不杀
     "dmsoft",  # 大漠插件相关进程
 ]
 logger = get_logger(__name__)
