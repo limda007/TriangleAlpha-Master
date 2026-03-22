@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -38,6 +39,15 @@ from master.app.core.account_db import AccountDB
 _HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
 _MASK = "••••••••"
 _SECRET_COLS = {1, 3}  # password + email password columns
+_STATUS_COL = 4
+
+_STATUS_COLORS: dict[str, tuple[str, str]] = {
+    "空闲中": ("#e8f5e9", "#2e7d32"),
+    "运行中": ("#e3f2fd", "#1565c0"),
+    "已完成": ("#fff3e0", "#e65100"),
+    "已取号": ("#f3e5f5", "#6a1b9a"),
+    "已封禁": ("#ffebee", "#c62828"),
+}
 
 
 class AccountInterface(ScrollArea):
@@ -121,6 +131,9 @@ class AccountInterface(ScrollArea):
         self.btnClear.clicked.connect(self._clearAccounts)
         self.statusFilter.currentTextChanged.connect(self._applyFilter)
 
+        # 首次加载
+        self._refreshTable()
+
     def _refreshTable(self) -> None:
         self._revealed.clear()
         accounts = self._pool.get_all_accounts()
@@ -151,6 +164,11 @@ class AccountInterface(ScrollArea):
                     item.setData(Qt.ItemDataRole.UserRole, acc.password)
                 elif col == 3:
                     item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
+                # 状态列着色
+                if col == _STATUS_COL:
+                    bg, fg = _STATUS_COLORS.get(text, ("#ffffff", "#333333"))
+                    item.setBackground(QColor(bg))
+                    item.setForeground(QColor(fg))
         self.table.setUpdatesEnabled(True)
         self._refreshStats()
         self._applyFilter()

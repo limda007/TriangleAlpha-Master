@@ -448,6 +448,21 @@ class TestUpsertFromSync:
         assert updated == 1
         assert db.total_count == 2
 
+    def test_completed_restored_when_active(self, db: AccountDB) -> None:
+        """已完成账号变为 is_active=true → 恢复为空闲中"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=18)
+        assert db.get_all_accounts()[0].status == AccountStatus.COMPLETED
+        accounts = [
+            {"username": "u1", "level": 5, "jin_bi": "0",
+             "is_banned": False, "is_active": True},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.IDLE
+        assert acc.completed_at is None
+
 
 class TestCounts:
     def test_counts_initial(self, db: AccountDB) -> None:

@@ -289,6 +289,16 @@ class AccountDB(QObject):
                 updated += 1
                 continue
 
+            # 已完成但 is_active=true → 账号被重新使用，恢复为空闲中
+            if is_active and existing["status"] == "已完成":
+                self._conn.execute(
+                    "UPDATE accounts SET status='空闲中', assigned_machine='', "
+                    "completed_at=NULL, level=?, jin_bi=? WHERE id = ?",
+                    (level, jin_bi, existing["id"]),
+                )
+                updated += 1
+                continue
+
             # 运行中账号的 level/jin_bi 由 STATUS 实时更新，SYNC 不覆盖
             if existing["status"] == "运行中":
                 continue
