@@ -1,4 +1,5 @@
 """进程管理"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +14,7 @@ _KILL_TARGETS = [
     "TriangleAlpha.Launcher",
     "TestDemo",
     "RegisterDmSoftConsoleApp",
-    # "OCR" — OCR.exe 常驻，不杀（Qt 重启不稳定）
+    "OCR",
     "steam",
     "steamwebhelper",
     "steamerrorreporter",
@@ -28,7 +29,7 @@ _KILL_TARGETS = [
 
 # 关键词匹配：进程名包含以下字符串即杀死
 _KILL_KEYWORDS = [
-    # "rapidocr" — RapidOCR-json.exe 是 OCR 子进程，不杀
+    "rapidocr",  # — RapidOCR-json.exe 是 OCR 子进程
     "dmsoft",  # 大漠插件相关进程
 ]
 logger = get_logger(__name__)
@@ -47,8 +48,12 @@ class ProcessManager:
         if not exe.exists():
             logger.error("TriangleAlpha.Launcher.exe 不存在: %s", exe)
             return False
-        self._process = await asyncio.create_subprocess_exec(str(exe), cwd=str(self._base_dir))
-        logger.info("启动 TriangleAlpha.Launcher.exe")
+        # 用 cmd start 以独立 GUI 进程启动，确保子进程（OCR 等）有桌面会话
+        await asyncio.create_subprocess_exec(
+            "cmd", "/c", "start", "", str(exe),
+            cwd=str(self._base_dir),
+        )
+        logger.info("启动 TriangleAlpha.Launcher.exe (独立 GUI 进程)")
         return True
 
     async def stop_all(self) -> int:
