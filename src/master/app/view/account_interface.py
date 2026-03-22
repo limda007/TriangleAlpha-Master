@@ -1,6 +1,8 @@
 """账号管理页面 — 导入/导出/状态追踪"""
 from __future__ import annotations
 
+from datetime import datetime
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -65,13 +67,15 @@ class AccountInterface(ScrollArea):
         # ── 工具栏 ──
         toolLayout = QHBoxLayout()
         self.btnImport = PrimaryPushButton(FIF.FOLDER_ADD, "导入账号", self)
-        self.btnExport = PushButton(FIF.SAVE, "导出已完成", self)
+        self.btnExtract = PushButton(FIF.COMPLETED, "提取账号", self)
+        self.btnExportAll = PushButton(FIF.SAVE, "导出所有", self)
         self.btnClear = PushButton(FIF.DELETE, "清空", self)
         self.statusFilter = ComboBox(self)
         self.statusFilter.addItems(["全部", "空闲中", "运行中", "已完成", "已取号"])
         self.statusFilter.setFixedWidth(100)
         toolLayout.addWidget(self.btnImport)
-        toolLayout.addWidget(self.btnExport)
+        toolLayout.addWidget(self.btnExtract)
+        toolLayout.addWidget(self.btnExportAll)
         toolLayout.addWidget(self.btnClear)
         toolLayout.addStretch()
         toolLayout.addWidget(self.statusFilter)
@@ -112,7 +116,8 @@ class AccountInterface(ScrollArea):
         # ── 信号 ──
         self._pool.pool_changed.connect(self._refreshTable)
         self.btnImport.clicked.connect(self._importAccounts)
-        self.btnExport.clicked.connect(self._exportCompleted)
+        self.btnExtract.clicked.connect(self._extractCompleted)
+        self.btnExportAll.clicked.connect(self._exportAll)
         self.btnClear.clicked.connect(self._clearAccounts)
         self.statusFilter.currentTextChanged.connect(self._applyFilter)
 
@@ -198,13 +203,16 @@ class AccountInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
-    def _exportCompleted(self) -> None:
+    def _extractCompleted(self) -> None:
+        """提取已完成账号 → 导出文件（带时间戳）+ 标记已取号"""
         if self._pool.completed_count == 0:
             InfoBar.warning("提示", "没有已完成的账号", parent=self,
                             position=InfoBarPosition.TOP, duration=2000)
             return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"提取账号_{ts}.txt"
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出已完成账号", "finished_accounts.txt", "Text (*.txt)"
+            self, "提取已完成账号", default_name, "Text (*.txt)"
         )
         if not path:
             return
@@ -214,11 +222,40 @@ class AccountInterface(ScrollArea):
                 f.write(text)
         except OSError as e:
             InfoBar.error(
+                "提取失败", str(e),
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        exported = len(text.splitlines()) - 1
+        InfoBar.success(
+            "提取成功", f"已提取 {exported} 个账号，状态已标记为已取号",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _exportAll(self) -> None:
+        """导出所有账号（不改变状态）"""
+        if self._pool.total_count == 0:
+            InfoBar.warning("提示", "没有账号数据", parent=self,
+                            position=InfoBarPosition.TOP, duration=2000)
+            return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"全部账号_{ts}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出所有账号", default_name, "Text (*.txt)"
+        )
+        if not path:
+            return
+        try:
+            text = self._pool.export_all()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            InfoBar.error(
                 "导出失败", str(e),
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
-        exported = len(text.splitlines()) - 1  # 减去表头
+        exported = len(text.splitlines()) - 1
         InfoBar.success(
             "导出成功", f"已导出 {exported} 个账号",
             parent=self, position=InfoBarPosition.TOP, duration=3000,

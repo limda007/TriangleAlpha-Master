@@ -434,7 +434,8 @@ class BigScreenInterface(ScrollArea):
         fileLayout.setSpacing(5)
 
         _FILE_BUTTONS = [
-            ("提取合格出货", FIF.COMPLETED, "btnExport"),
+            ("提取账号", FIF.COMPLETED, "btnExtract"),
+            ("导出所有", FIF.SAVE, "btnExportAll"),
             ("下发账号文件", FIF.SEND_FILL, "btnSendFile"),
             ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
             ("清理单机账号", FIF.REMOVE, "btnCleanAccounts"),
@@ -465,16 +466,17 @@ class BigScreenInterface(ScrollArea):
         self._actionStack.setCurrentWidget(opPage)
         self._actionPivot.setCurrentItem("opPage")
 
-        # 连接按钮信号（操作: 0-3, 文件: 4-8）
+        # 连接按钮信号（操作: 0-3, 文件: 4-9）
         self._actionBtns[0].clicked.connect(self._oneClickStart)
         self._actionBtns[1].clicked.connect(self._startExeOnAll)
         self._actionBtns[2].clicked.connect(self._stopExeOnAll)
         self._actionBtns[3].clicked.connect(self._rebootAllPC)
-        self._actionBtns[4].clicked.connect(self._exportQualified)
-        self._actionBtns[5].clicked.connect(self._sendFileToAll)
-        self._actionBtns[6].clicked.connect(self._deleteFileOnAll)
-        self._actionBtns[7].clicked.connect(self._cleanStandaloneAccounts)
-        self._actionBtns[8].clicked.connect(self._distributeKey)
+        self._actionBtns[4].clicked.connect(self._extractCompleted)
+        self._actionBtns[5].clicked.connect(self._exportAll)
+        self._actionBtns[6].clicked.connect(self._sendFileToAll)
+        self._actionBtns[7].clicked.connect(self._deleteFileOnAll)
+        self._actionBtns[8].clicked.connect(self._cleanStandaloneAccounts)
+        self._actionBtns[9].clicked.connect(self._distributeKey)
 
         return panel
 
@@ -901,16 +903,18 @@ class BigScreenInterface(ScrollArea):
         dlg.cancelButton.setText("取消")
         return bool(dlg.exec())
 
-    def _exportQualified(self) -> None:
-        """提取合格出货"""
+    def _extractCompleted(self) -> None:
+        """提取已完成账号 → 导出文件（带时间戳）+ 标记已取号"""
         if self._pool.completed_count == 0:
             InfoBar.warning(
                 "提示", "没有已完成的账号",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出已完成账号", "finished_accounts.txt", "Text (*.txt)",
+            self, "提取已完成账号", f"提取账号_{ts}.txt", "Text (*.txt)",
         )
         if not path:
             return
@@ -920,11 +924,42 @@ class BigScreenInterface(ScrollArea):
                 f.write(text)
         except OSError as e:
             InfoBar.error(
+                "提取失败", str(e),
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        exported = len(text.splitlines()) - 1
+        InfoBar.success(
+            "提取成功", f"已提取 {exported} 个账号，状态已标记为已取号",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _exportAll(self) -> None:
+        """导出所有账号（不改变状态）"""
+        if self._pool.total_count == 0:
+            InfoBar.warning(
+                "提示", "没有账号数据",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出所有账号", f"全部账号_{ts}.txt", "Text (*.txt)",
+        )
+        if not path:
+            return
+        try:
+            text = self._pool.export_all()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            InfoBar.error(
                 "导出失败", str(e),
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
-        exported = len(text.splitlines()) - 1  # 减去表头
+        exported = len(text.splitlines()) - 1
         InfoBar.success(
             "导出成功", f"已导出 {exported} 个账号",
             parent=self, position=InfoBarPosition.TOP, duration=3000,

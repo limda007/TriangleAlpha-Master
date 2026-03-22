@@ -347,6 +347,20 @@ class AccountDB(QObject):
             self.pool_changed.emit()
         return "\n".join(lines)
 
+    def export_all(self) -> str:
+        """导出所有账号（含表头），不改变状态。"""
+        cur = self._conn.execute("SELECT * FROM accounts ORDER BY id")
+        header = "账号----密码----邮箱----邮箱密码----等级----金币----状态----备注----完成时间"
+        lines: list[str] = [header]
+        for row in cur.fetchall():
+            time_str = row["completed_at"] or "无"
+            lines.append(
+                f"{row['username']}----{row['password']}----{row['bind_email']}----"
+                f"{row['bind_email_pwd']}----{row['level']}----{row['jin_bi']}----"
+                f"{row['status']}----{row['notes']}----{time_str}"
+            )
+        return "\n".join(lines)
+
     # ── 清空 ───────────────────────────────────────────────
 
     def clear_all(self) -> None:

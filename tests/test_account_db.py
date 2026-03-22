@@ -187,6 +187,19 @@ class TestExport:
         assert len(lines) == 1  # 仅表头
         assert lines[0].startswith("账号----密码")
 
+    def test_export_all(self, db: AccountDB) -> None:
+        db.import_fresh("u1----p1\nu2----p2")
+        db.allocate("VM-01")
+        db.complete("VM-01", level=20)
+        text = db.export_all()
+        lines = text.splitlines()
+        assert lines[0].startswith("账号----密码")  # 表头
+        assert len(lines) == 3  # 表头 + 2 账号
+        assert "u1" in text
+        assert "u2" in text
+        assert "已完成" in text
+        assert "空闲中" in text
+
 
 class TestClear:
     def test_clear_all(self, db: AccountDB) -> None:
