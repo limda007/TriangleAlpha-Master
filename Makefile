@@ -61,7 +61,7 @@ package-slave: sync ## 打包被控端
 deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
 	@echo ">>> 上传源码到 VM..."
 	ssh $(VM_HOST) "mkdir $(VM_BUILD_DIR)\\src\\common 2>nul & mkdir $(VM_BUILD_DIR)\\src\\slave\\resource 2>nul & echo OK"
-	scp slave.spec $(VM_HOST):"$(VM_BUILD_DIR)/"
+	scp slave.spec pyproject.toml $(VM_HOST):"$(VM_BUILD_DIR)/"
 	scp src/common/__init__.py src/common/protocol.py src/common/models.py $(VM_HOST):"$(VM_BUILD_DIR)/src/common/"
 	scp src/slave/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/slave/"
 	scp -r src/slave/resource/ $(VM_HOST):"$(VM_BUILD_DIR)/src/slave/resource/"
