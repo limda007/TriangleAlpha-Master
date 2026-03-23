@@ -251,6 +251,11 @@ class MainWindow(FluentWindow):
         # 双层防护：level 和 jin_bi 都是零值时跳过（IPC 超时/重启过渡期产生的无效数据）
         if node.level == 0 and (not node.jin_bi or node.jin_bi == "0"):
             return
+        # 校验 current_account 与绑定账号一致，防止旧号数据写入新号
+        if node.current_account:
+            bound = self.accountPool.get_account_for_machine(machine_name)
+            if bound and bound.username != node.current_account:
+                return
         self.accountPool.update_from_status(
             machine_name, node.level, node.jin_bi, node.game_state,
             current_account=node.current_account,
@@ -281,6 +286,11 @@ class MainWindow(FluentWindow):
         acc = self.accountPool.allocate(machine_name)
         if acc is None:
             return
+        # 清空节点缓存，防止旧账号的等级/金币写入新账号
+        node.level = 0
+        node.jin_bi = "0"
+        node.current_account = ""
+        node.game_state = ""
         self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
 
     def _autoAssignKami(self, machine_name: str) -> None:
