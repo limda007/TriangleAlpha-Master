@@ -54,7 +54,7 @@ class HeartbeatService:
         self._interval = interval
         self._machine_name = platform.node()
         self._user_name = os.getenv("USERNAME", os.getenv("USER", "unknown"))
-        self._group = "默认"
+        self._group = self._user_name
         self._running = False
         self._on_sent = on_sent
         self._beat_count = 0

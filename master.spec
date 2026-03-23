@@ -58,16 +58,21 @@ def _build_macos_icon() -> str | None:
     return str(icon_path)
 
 
+from PyInstaller.utils.hooks import collect_all
+
+httpx_datas, httpx_binaries, httpx_hiddenimports = collect_all('httpx')
+httpcore_datas, httpcore_binaries, httpcore_hiddenimports = collect_all('httpcore')
+
 macos_icon = _build_macos_icon()
 exe_icon = 'src/master/app/resource/icon.ico' if sys.platform == 'win32' else None
 
 a = Analysis(
     ['src/master/main.py'],
     pathex=['src'],
-    binaries=[],
+    binaries=[] + httpx_binaries + httpcore_binaries,
     datas=[
         ('src/master/app/resource', 'master/app/resource'),
-    ],
+    ] + httpx_datas + httpcore_datas,
     hiddenimports=[
         'PyQt6.sip',
         'qfluentwidgets',
@@ -96,8 +101,7 @@ a = Analysis(
         'common.models',
         'psutil',
         'httpx',
-        'httpx._transports',
-        'httpx._transports.default',
+        'certifi',
         'master.app.core.platform_syncer',
     ],
     hookspath=[],
