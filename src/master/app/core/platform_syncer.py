@@ -175,7 +175,7 @@ class PlatformSyncer(QObject):
         self._api_url = api_url.rstrip("/") if api_url else ""
         self._username = username
         self._password = password
-        self._group_name = group_name
+        self._group_name = group_name or username
 
         self._client = PlatformClient(
             base_url=self._api_url,
