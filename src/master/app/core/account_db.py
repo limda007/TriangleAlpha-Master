@@ -455,6 +455,19 @@ class AccountDB(QObject):
         self._refresh_counts()
         self.pool_changed.emit()
 
+    def delete_by_usernames(self, usernames: list[str]) -> int:
+        """按用户名批量删除，返回删除数"""
+        if not usernames:
+            return 0
+        placeholders = ",".join("?" * len(usernames))
+        cur = self._conn.execute(
+            f"DELETE FROM accounts WHERE username IN ({placeholders})", usernames,  # noqa: S608
+        )
+        self._conn.commit()
+        self._refresh_counts()
+        self.pool_changed.emit()
+        return cur.rowcount
+
     # ── 统计属性 ───────────────────────────────────────────
 
     @property

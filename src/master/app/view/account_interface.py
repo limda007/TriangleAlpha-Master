@@ -306,6 +306,10 @@ class AccountInterface(ScrollArea):
         row = self.table.rowAt(pos.y())
         if row < 0:
             return
+        selected_rows = self.table.selectionModel().selectedRows()
+        selected_indices = [idx.row() for idx in selected_rows] if selected_rows else [row]
+        count = len(selected_indices)
+
         menu = RoundMenu(parent=self.table)
         # 复制操作（单行）
         acc_item = self.table.item(row, 0)
@@ -328,14 +332,24 @@ class AccountInterface(ScrollArea):
         # 释放绑定（支持多选）
         releasable = self._getReleasableRows()
         if releasable:
-            count = len(releasable)
+            rc = len(releasable)
             menu.addAction(
                 Action(
                     FIF.REMOVE,
-                    f"释放绑定 ({count}行)" if count > 1 else "释放绑定",
+                    f"释放绑定 ({rc}行)" if rc > 1 else "释放绑定",
                     triggered=lambda: self._releaseSelectedAccounts(releasable),
                 )
             )
+        # 删除（支持多选）
+        menu.addSeparator()
+        label = f"删除选中 ({count}行)" if count > 1 else "删除"
+        menu.addAction(
+            Action(
+                FIF.DELETE,
+                label,
+                triggered=lambda: self._deleteSelectedAccounts(selected_indices),
+            )
+        )
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
 
     def _copyFullRow(self, row: int) -> None:
@@ -381,6 +395,24 @@ class AccountInterface(ScrollArea):
                 "已释放", f"已释放 {released} 个绑定账号",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
+
+    def _deleteSelectedAccounts(self, rows: list[int]) -> None:
+        """删除选中行的账号"""
+        usernames = []
+        for r in rows:
+            item = self.table.item(r, 0)
+            if item:
+                usernames.append(item.text())
+        if not usernames:
+            return
+        dlg = MessageBox("确认删除", f"确定要删除 {len(usernames)} 个账号吗？此操作不可撤销。", self)
+        if not dlg.exec():
+            return
+        deleted = self._pool.delete_by_usernames(usernames)
+        InfoBar.success(
+            "已删除", f"已删除 {deleted} 个账号",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
 
     def _copyToClipboard(self, text: str) -> None:
         from PyQt6.QtWidgets import QApplication

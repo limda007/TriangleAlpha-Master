@@ -90,9 +90,8 @@ class _BalanceWorker(QThread):
 
 
 _NODE_HEADERS = [
-    "", "机器名", "IP地址", "卡密", "挂机账号", "等级", "金币",
-    "运行时间", "运行状态", "CPU%", "内存%", "版本",
-    "补齐队友", "武器配置", "下号等级", "舔包次数",
+    "", "机器名", "IP地址", "卡密", "等级", "金币",
+    "运行时间", "运行状态", "CPU%", "内存%",
 ]
 
 # 状态色
@@ -207,6 +206,8 @@ class BigScreenInterface(ScrollArea):
 
         bottomWidget = QWidget(self)
         bottomWidget.setLayout(bottom)
+        bottomWidget.setMinimumHeight(120)
+        self._bottomWidget = bottomWidget
 
         # ═══ 可拖拽分割器：节点表格 ↔ 底部区域 ═══
         splitter = QSplitter(Qt.Orientation.Vertical, self.view)
@@ -214,7 +215,7 @@ class BigScreenInterface(ScrollArea):
         splitter.addWidget(bottomWidget)
         splitter.setStretchFactor(0, 7)
         splitter.setStretchFactor(1, 3)
-        splitter.setChildrenCollapsible(False)
+        splitter.setChildrenCollapsible(True)
         splitter.setHandleWidth(8)
         root.addWidget(splitter)
 
@@ -346,15 +347,20 @@ class BigScreenInterface(ScrollArea):
         table.verticalHeader().hide()
 
         header = table.horizontalHeader()
+        header.setMinimumSectionSize(30)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(0, 48)
+        table.setColumnWidth(0, 40)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(3, 140)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        for col in range(5, len(_NODE_HEADERS)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        table.setColumnWidth(3, 100)
+        for col in range(4, len(_NODE_HEADERS)):
+            if col == 7:  # 运行状态
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+                table.setColumnWidth(col, 320)
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        table.verticalHeader().setDefaultSectionSize(28)
 
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         table.customContextMenuRequested.connect(self._showNodeContextMenu)
@@ -386,7 +392,7 @@ class BigScreenInterface(ScrollArea):
         layout.addLayout(titleRow)
 
         # 账号表格（替代文本框）
-        _POOL_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
+        _POOL_HEADERS = ["账号", "邮箱", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
         self.accountTable = TableWidget(panel)
         self.accountTable.setColumnCount(len(_POOL_HEADERS))
         self.accountTable.setHorizontalHeaderLabels(_POOL_HEADERS)
@@ -403,6 +409,9 @@ class BigScreenInterface(ScrollArea):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         layout.addWidget(self.accountTable, stretch=1)
+
+        self.accountTable.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.accountTable.customContextMenuRequested.connect(self._showAccountContextMenu)
 
         # 底部: 统计 + 超时监控
         footLayout = QHBoxLayout()
@@ -955,18 +964,12 @@ class BigScreenInterface(ScrollArea):
             node.machine_name,
             node.ip,
             kami_display,
-            node.current_account or "--",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
             self._format_elapsed(node.elapsed),
             node.status_text or node.game_state or node.status,
             f"{node.cpu_percent:.0f}%",
             f"{node.mem_percent:.0f}%",
-            node.slave_version or "--",
-            self._teammate_fill_display(node.teammate_fill),
-            node.weapon_config or "--",
-            node.level_threshold or "--",
-            node.loot_count or "--",
         ]
 
         # 状态列：彩色圆点图标
@@ -991,7 +994,7 @@ class BigScreenInterface(ScrollArea):
                 item.setText(text)
 
         # 运行状态列着色（仅变化时）
-        state_item = self.table.item(row, 8)
+        state_item = self.table.item(row, 7)
         if state_item:
             color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
             if state_item.foreground().color() != color:
@@ -1001,12 +1004,12 @@ class BigScreenInterface(ScrollArea):
         master_key = self._pool.get_config("api_key")
         if master_key and state_item:
             if not node.token_key:
-                warn_text = texts[8] + " ⚠缺Key"
+                warn_text = texts[7] + " ⚠缺Key"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#c62828"))
             elif node.token_key != master_key:
-                warn_text = texts[8] + " ⚠Key不一致"
+                warn_text = texts[7] + " ⚠Key不一致"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#e65100"))
@@ -1043,17 +1046,14 @@ class BigScreenInterface(ScrollArea):
         btn.setText(f"提取合格出货 ({count})" if count else "提取合格出货")
 
     def _refreshAccountTable(self) -> None:
-        """从 AccountDB 刷新账号表格"""
-        accounts = self._pool.get_all_accounts()
-        _MASK = "••••••••"
+        """从 AccountDB 刷新账号表格（仅显示空闲中）"""
+        accounts = [a for a in self._pool.get_all_accounts() if a.status.value == "空闲中"]
         self.accountTable.setUpdatesEnabled(False)
         self.accountTable.setRowCount(len(accounts))
         for row, acc in enumerate(accounts):
             vals = [
                 acc.username,
-                _MASK,
                 acc.bind_email,
-                _MASK if acc.bind_email_password else "",
                 acc.status.value,
                 acc.assigned_machine,
                 str(acc.level) if acc.level else "",
@@ -1069,7 +1069,7 @@ class BigScreenInterface(ScrollArea):
                 else:
                     item.setText(text)
             # 状态列着色
-            status_item = self.accountTable.item(row, 4)
+            status_item = self.accountTable.item(row, 2)
             if status_item:
                 color = _ACCOUNT_STATUS_COLORS.get(acc.status.value)
                 if color:
@@ -1452,6 +1452,13 @@ class BigScreenInterface(ScrollArea):
                             )
                         )
 
+        # 底部面板显隐
+        menu.addSeparator()
+        bottom_label = "显示底部面板" if self._bottomWidget.isHidden() else "隐藏底部面板"
+        menu.addAction(
+            Action(FIF.LAYOUT, bottom_label, triggered=self._toggleBottomPanel)
+        )
+
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
 
     def _copyText(self, text: str) -> None:
@@ -1462,6 +1469,43 @@ class BigScreenInterface(ScrollArea):
         InfoBar.success(
             "已复制", text,
             parent=self, position=InfoBarPosition.TOP, duration=1500,
+        )
+
+    def _toggleBottomPanel(self) -> None:
+        """切换底部面板显隐"""
+        self._bottomWidget.setVisible(self._bottomWidget.isHidden())
+
+    def _showAccountContextMenu(self, pos) -> None:
+        """账号池表格右键菜单"""
+        row = self.accountTable.rowAt(pos.y())
+        if row < 0:
+            return
+        selected_rows = self.accountTable.selectionModel().selectedRows()
+        indices = [idx.row() for idx in selected_rows] if selected_rows else [row]
+        count = len(indices)
+        menu = RoundMenu(parent=self.accountTable)
+        label = f"删除选中 ({count}行)" if count > 1 else "删除"
+        menu.addAction(
+            Action(FIF.DELETE, label, triggered=lambda: self._deleteSelectedPoolAccounts(indices))
+        )
+        menu.exec(self.accountTable.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
+
+    def _deleteSelectedPoolAccounts(self, rows: list[int]) -> None:
+        """删除账号池选中行"""
+        usernames = []
+        for r in rows:
+            item = self.accountTable.item(r, 0)
+            if item:
+                usernames.append(item.text())
+        if not usernames:
+            return
+        dlg = MessageBox("确认删除", f"确定要删除 {len(usernames)} 个账号吗？", self.window())
+        if not dlg.exec():
+            return
+        deleted = self._pool.delete_by_usernames(usernames)
+        InfoBar.success(
+            "已删除", f"已删除 {deleted} 个账号",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
     def _setNodeGroup(self, ip: str, machine_name: str) -> None:

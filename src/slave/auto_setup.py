@@ -6,6 +6,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import psutil
@@ -63,8 +64,54 @@ def setup_startup() -> None:
         )
 
         logger.info("计划任务已注册（管理员权限 + 崩溃重启）: %s", exe_path)
+
+        # 同时在启动文件夹创建快捷方式（双保险）
+        _create_startup_shortcut(exe_path)
     except Exception:
         logger.exception("自启动注册失败")
+
+
+def _create_startup_shortcut(exe_path: str) -> None:
+    """在当前用户启动文件夹创建快捷方式（每次运行覆盖写入）。"""
+    try:
+        startup_dir = Path(os.environ.get(
+            "APPDATA", Path.home() / "AppData" / "Roaming"
+        )) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        shortcut_path = startup_dir / f"{_TASK_NAME}.lnk"
+
+        # 使用 VBScript 创建快捷方式，避免依赖 pywin32
+        vbs = (
+            f'Set ws = CreateObject("WScript.Shell")\n'
+            f'Set sc = ws.CreateShortcut("{shortcut_path}")\n'
+            f'sc.TargetPath = "{exe_path}"\n'
+            f'sc.WorkingDirectory = "{Path(exe_path).parent}"\n'
+            f'sc.WindowStyle = 7\n'
+            f'sc.Save\n'
+        )
+        vbs_path = Path(os.environ.get("TEMP", tempfile.gettempdir())) / "_ta_shortcut.vbs"
+        vbs_path.write_text(vbs, encoding="utf-8")
+        subprocess.run(  # noqa: S603
+            ["cscript", "//Nologo", str(vbs_path)],
+            shell=False, check=False, capture_output=True, timeout=10,
+        )
+        vbs_path.unlink(missing_ok=True)
+        logger.info("启动文件夹快捷方式已创建: %s", shortcut_path)
+    except Exception:
+        logger.exception("创建启动文件夹快捷方式失败")
+
+
+def _remove_startup_shortcut() -> None:
+    """删除启动文件夹中的快捷方式。"""
+    try:
+        startup_dir = Path(os.environ.get(
+            "APPDATA", Path.home() / "AppData" / "Roaming"
+        )) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        shortcut_path = startup_dir / f"{_TASK_NAME}.lnk"
+        if shortcut_path.exists():
+            shortcut_path.unlink()
+            logger.info("已删除启动文件夹快捷方式: %s", shortcut_path)
+    except Exception:
+        logger.exception("删除启动文件夹快捷方式失败")
 
 
 def _remove_legacy_registry_startup() -> None:
@@ -100,6 +147,8 @@ def uninstall() -> None:
     )
     # 清除注册表残留
     _remove_legacy_registry_startup()
+    # 删除启动文件夹快捷方式
+    _remove_startup_shortcut()
     logger.info("卸载清理完成")
 
 
