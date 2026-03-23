@@ -101,3 +101,26 @@ class OperationRecord:
     target: str
     detail: str = ""
     result: str = ""
+
+
+class KamiStatus(enum.Enum):
+    ACTIVATED = "已激活"
+    UNUSED = "未使用"
+    EXPIRED = "已过期"
+    UNKNOWN = "未知"
+
+
+@dataclass
+class KamiInfo:
+    """卡密信息"""
+    id: int = 0
+    kami_code: str = ""
+    kami_type: str = ""          # "online" / "offline"
+    end_date: str = ""           # "YYYY-MM-DD"
+    remaining_days: int = 0
+    status: KamiStatus = KamiStatus.UNKNOWN
+    device_used: int = 0
+    device_total: int = 0
+    activated_at: str = ""
+    created_at: str = ""
+    bound_nodes: list[str] = field(default_factory=list)

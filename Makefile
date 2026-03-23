@@ -18,7 +18,7 @@ VM_PYTHON ?= C:\\Python312\\python.exe
 .PHONY: help deps sync lint fmt typecheck test check \
 	run run-master run-slave \
 	package package-master package-slave \
-	deploy-slave \
+	deploy-master deploy-slave \
 	clean
 
 deps: ## 安装 uv（未安装时）
@@ -73,6 +73,28 @@ deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
 	ssh $(VM_HOST) "copy /Y \"$(VM_BUILD_DIR)\\dist\\TriangleAlpha-Slave.exe\" \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\""
 	@echo ">>> 启动..."
 	ssh $(VM_HOST) "schtasks /Create /TN StartSlave /TR \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\" /SC ONCE /ST 00:00 /F && schtasks /Run /TN StartSlave && schtasks /Delete /TN StartSlave /F"
+	@echo ">>> 部署完成！"
+
+deploy-master: ## 构建并部署主控端到 VM（生产版，无控制台）
+	@echo ">>> 上传源码到 VM..."
+	ssh $(VM_HOST) "powershell -Command \"New-Item -ItemType Directory -Force -Path '$(VM_BUILD_DIR)\\src\\common','$(VM_BUILD_DIR)\\src\\master','$(VM_BUILD_DIR)\\src\\master\\app\\common','$(VM_BUILD_DIR)\\src\\master\\app\\components','$(VM_BUILD_DIR)\\src\\master\\app\\core','$(VM_BUILD_DIR)\\src\\master\\app\\view','$(VM_BUILD_DIR)\\src\\master\\app\\resource' | Out-Null; echo OK\""
+	scp master.spec pyproject.toml $(VM_HOST):"$(VM_BUILD_DIR)/"
+	scp src/common/__init__.py src/common/protocol.py src/common/models.py $(VM_HOST):"$(VM_BUILD_DIR)/src/common/"
+	scp src/master/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/"
+	scp src/master/app/__init__.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/" 2>/dev/null; true
+	scp src/master/app/common/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/common/"
+	scp src/master/app/components/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/components/"
+	scp src/master/app/core/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/core/"
+	scp src/master/app/view/*.py $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/view/"
+	scp -r src/master/app/resource/* $(VM_HOST):"$(VM_BUILD_DIR)/src/master/app/resource/"
+	@echo ">>> 停止旧进程..."
+	-ssh $(VM_HOST) "taskkill /F /IM TriangleAlpha-Master.exe 2>nul"
+	@echo ">>> 在 VM 上构建..."
+	ssh $(VM_HOST) "cd $(VM_BUILD_DIR) && $(VM_PYTHON) -m PyInstaller --clean --noconfirm master.spec"
+	@echo ">>> 部署..."
+	ssh $(VM_HOST) "copy /Y \"$(VM_BUILD_DIR)\\dist\\TriangleAlpha-Master.exe\" \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Master.exe\""
+	@echo ">>> 启动..."
+	ssh $(VM_HOST) "schtasks /Create /TN StartMaster /TR \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Master.exe\" /SC ONCE /ST 00:00 /F && schtasks /Run /TN StartMaster && schtasks /Delete /TN StartMaster /F"
 	@echo ">>> 部署完成！"
 
 clean: ## 清理构建与缓存目录

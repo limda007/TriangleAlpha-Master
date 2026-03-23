@@ -23,6 +23,7 @@ class UdpMessageType(enum.Enum):
     EXT_ONLINE = "EXT_ONLINE"
     ACCOUNT_SYNC = "ACCOUNT_SYNC"
     NEED_ACCOUNT = "NEED_ACCOUNT"
+    NEED_KAMI = "NEED_KAMI"
 
 
 class GameState:
@@ -122,6 +123,11 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 type=UdpMessageType.NEED_ACCOUNT,
                 machine_name=parts[1],
             )
+        case "NEED_KAMI" if len(parts) >= 2:
+            return UdpMessage(
+                type=UdpMessageType.NEED_KAMI,
+                machine_name=parts[1],
+            )
     return None
 
 
@@ -156,6 +162,10 @@ def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:
     return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}"
 
 
+def build_udp_need_kami(machine_name: str) -> str:
+    return f"NEED_KAMI|{machine_name}"
+
+
 class TcpCommand(enum.Enum):
     UPDATE_TXT = "UPDATETXT"
     START_EXE = "STARTEXE"
@@ -165,6 +175,7 @@ class TcpCommand(enum.Enum):
     DELETE_FILE = "DELETEFILE"
     EXT_SET_GROUP = "EXT_SETGROUP"
     EXT_SET_CONFIG = "EXT_SETCONFIG"
+    PUSH_KAMI = "PUSHKAMI"
 
 
 @dataclass(frozen=True)
@@ -174,7 +185,7 @@ class ParsedTcpCommand:
 
 
 def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
-    if cmd in (TcpCommand.UPDATE_TXT, TcpCommand.UPDATE_KEY) and payload:
+    if cmd in (TcpCommand.UPDATE_TXT, TcpCommand.UPDATE_KEY, TcpCommand.PUSH_KAMI) and payload:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
         return f"{cmd.value}|{encoded}"
     elif cmd in (

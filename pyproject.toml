@@ -1,6 +1,6 @@
 [project]
 name = "triangle-alpha-master"
-version = "1.0.24"
+version = "1.0.25"
 description = "TriangleAlpha 群控系统"
 requires-python = ">=3.12"
 dependencies = [

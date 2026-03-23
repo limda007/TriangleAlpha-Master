@@ -137,6 +137,8 @@ class CommandHandler:
                 desc = self._handle_set_group(parsed)
             case TcpCommand.EXT_SET_CONFIG:
                 desc = self._handle_set_config(parsed)
+            case TcpCommand.PUSH_KAMI:
+                desc = self._handle_push_kami(parsed)
 
         if desc and self._on_command:
             self._on_command(desc)
@@ -223,4 +225,16 @@ class CommandHandler:
             fpath.write_text(content, encoding="utf-8")
         desc = f"文件已更新: {filename}"
         logger.info("配置: %s", desc)
+        return desc
+
+    def _handle_push_kami(self, parsed: ParsedTcpCommand) -> str:
+        """处理卡密下发指令，写入 kamis.txt。"""
+        try:
+            content = base64.b64decode(parsed.payload).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as err:
+            logger.error("PUSHKAMI 解码失败: %s", err)
+            return ""
+        (self._base_dir / "kamis.txt").write_text(content, encoding="utf-8")
+        desc = f"卡密已更新: {content[:20]}..."
+        logger.info("接收: %s", desc)
         return desc

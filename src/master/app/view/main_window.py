@@ -14,6 +14,7 @@ from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, NavigationIte
 from common.protocol import TcpCommand
 from master.app.common.config import RESOURCE_DIR, cfg
 from master.app.core.account_db import AccountDB
+from master.app.core.kami_db import KamiDB
 from master.app.core.log_receiver import LogReceiverThread
 from master.app.core.node_manager import NodeManager
 from master.app.core.platform_syncer import PlatformSyncer
@@ -23,6 +24,7 @@ from master.app.view.account_interface import AccountInterface
 from master.app.view.bigscreen_interface import BigScreenInterface
 from master.app.view.help_interface import HelpInterface
 from master.app.view.history_interface import HistoryInterface
+from master.app.view.kami_interface import KamiInterface
 from master.app.view.log_interface import LogInterface
 from master.app.view.setting_interface import SettingInterface
 
@@ -42,6 +44,7 @@ class MainWindow(FluentWindow):
         self.nodeManager = NodeManager(self)
         self.tcpCommander = TcpCommander(parent=self)
         self.accountPool = AccountDB(_get_db_path(), parent=self)
+        self.kamiDB = KamiDB(_get_db_path(), parent=self)
         self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
         self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
@@ -50,8 +53,12 @@ class MainWindow(FluentWindow):
         # 页面
         self.bigscreenInterface = BigScreenInterface(
             self.nodeManager, self.tcpCommander, self.accountPool, self,
+            kami_db=self.kamiDB,
         )
         self.accountInterface = AccountInterface(self.accountPool, self)
+        self.kamiInterface = KamiInterface(
+            self.kamiDB, self.nodeManager, self,
+        )
         self.historyInterface = HistoryInterface(self.nodeManager, self)
         self.logInterface = LogInterface(self)
         self.logInterface.set_receiver(self.logReceiver)
@@ -70,6 +77,10 @@ class MainWindow(FluentWindow):
 
         # 节点重连时自动重发绑定账号
         self.nodeManager.node_online.connect(self._onNodeReconnect)
+        # 节点上线时自动分配卡密（纯本地 SQLite 查询）
+        self.nodeManager.node_online.connect(self._autoAssignKami)
+        # slave 主动请求卡密
+        self.nodeManager.need_kami.connect(self._onNeedKami)
 
         # 节点上报时自动补全缺失的验证码 Key
         self._tokenPushedAt: dict[str, float] = {}  # machine_name → monotonic timestamp
@@ -92,6 +103,7 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
         self.navigationInterface.addSeparator()
         self.addSubInterface(self.accountInterface, FIF.PEOPLE, "账号管理", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.kamiInterface, FIF.LABEL, "卡密管理", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.historyInterface, FIF.HISTORY, "操作历史", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.logInterface, FIF.DOCUMENT, "实时日志", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.helpInterface, FIF.HELP, "帮助", NavigationItemPosition.BOTTOM)
@@ -124,6 +136,7 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, e):
         self.platformSyncer.stop()      # 首行，确保 worker 停止
+        self.kamiDB.close()
         self.accountPool.close()
         self.udpListener.stop()
         self.logReceiver.stop()
@@ -269,3 +282,28 @@ class MainWindow(FluentWindow):
         if acc is None:
             return
         self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+
+    def _autoAssignKami(self, machine_name: str) -> None:
+        """节点上线时自动分配可用卡密（纯本地 SQLite 查询，不做 HTTP）"""
+        kami = self.kamiDB.find_available_kami()
+        if kami is None:
+            return
+        # 检查该节点是否已绑定此卡密
+        if machine_name in kami.bound_nodes:
+            return
+        self.kamiDB.bind_node(kami.id, machine_name)
+
+    def _onNeedKami(self, machine_name: str) -> None:
+        """slave 请求卡密 → 分配可用卡密并通过 TCP 下发到 kamis.txt"""
+        node = self.nodeManager.nodes.get(machine_name)
+        if not node:
+            return
+        kami = self.kamiDB.find_available_kami()
+        if kami is None:
+            return
+        if machine_name in kami.bound_nodes:
+            # 已绑定，直接重发
+            self.tcpCommander.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
+            return
+        if self.kamiDB.bind_node(kami.id, machine_name):
+            self.tcpCommander.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)

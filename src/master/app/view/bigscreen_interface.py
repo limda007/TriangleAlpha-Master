@@ -90,7 +90,7 @@ class _BalanceWorker(QThread):
 
 
 _NODE_HEADERS = [
-    "", "机器名", "IP地址", "挂机账号", "等级", "金币",
+    "", "机器名", "IP地址", "卡密", "挂机账号", "等级", "金币",
     "运行时间", "运行状态", "CPU%", "内存%", "版本",
     "补齐队友", "武器配置", "下号等级", "舔包次数",
 ]
@@ -146,12 +146,14 @@ class BigScreenInterface(ScrollArea):
         tcp_cmd: TcpCommander,
         account_pool: AccountDB,
         parent: QWidget | None = None,
+        kami_db=None,
     ):
         super().__init__(parent)
         self.setObjectName("bigscreenInterface")
         self._nm = node_mgr
         self._tcp = tcp_cmd
         self._pool = account_pool
+        self._kami_db = kami_db
         self._start_time = datetime.now()
         self._row_map: dict[str, int] = {}
         self._pending_updates: set[str] = set()
@@ -348,8 +350,10 @@ class BigScreenInterface(ScrollArea):
         table.setColumnWidth(0, 48)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        for col in range(4, len(_NODE_HEADERS)):
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(3, 140)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        for col in range(5, len(_NODE_HEADERS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -475,7 +479,7 @@ class BigScreenInterface(ScrollArea):
             ("导出所有", FIF.SAVE, "btnExportAll"),
             ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
             ("清理单机账号", FIF.REMOVE, "btnCleanAccounts"),
-            ("分发专属 Key", FIF.CERTIFICATE, "btnDistKey"),
+            ("一键分配卡密", FIF.CERTIFICATE, "btnBatchKami"),
         ]
         for text, icon, obj_name in _FILE_BUTTONS:
             btn = PushButton(icon, text, filePage)
@@ -515,7 +519,7 @@ class BigScreenInterface(ScrollArea):
         self._actionBtns[5].clicked.connect(self._exportAll)
         self._actionBtns[6].clicked.connect(self._deleteFileOnAll)
         self._actionBtns[7].clicked.connect(self._cleanStandaloneAccounts)
-        self._actionBtns[8].clicked.connect(self._distributeKey)
+        self._actionBtns[8].clicked.connect(self._batchAssignKami)
 
         return panel
 
@@ -940,10 +944,17 @@ class BigScreenInterface(ScrollArea):
             self._setRowData(row, node)
 
     def _setRowData(self, row: int, node) -> None:
+        # 查询节点绑定的卡密
+        kami_display = "--"
+        if self._kami_db:
+            kami = self._kami_db.get_kami_for_node(node.machine_name)
+            if kami:
+                kami_display = kami.kami_code[:8]
         texts = [
             "",  # col 0 状态图标
             node.machine_name,
             node.ip,
+            kami_display,
             node.current_account or "--",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
@@ -980,7 +991,7 @@ class BigScreenInterface(ScrollArea):
                 item.setText(text)
 
         # 运行状态列着色（仅变化时）
-        state_item = self.table.item(row, 7)
+        state_item = self.table.item(row, 8)
         if state_item:
             color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
             if state_item.foreground().color() != color:
@@ -990,12 +1001,12 @@ class BigScreenInterface(ScrollArea):
         master_key = self._pool.get_config("api_key")
         if master_key and state_item:
             if not node.token_key:
-                warn_text = texts[7] + " ⚠缺Key"
+                warn_text = texts[8] + " ⚠缺Key"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#c62828"))
             elif node.token_key != master_key:
-                warn_text = texts[7] + " ⚠Key不一致"
+                warn_text = texts[8] + " ⚠Key不一致"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#e65100"))
@@ -1258,37 +1269,6 @@ class BigScreenInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 
-    def _distributeKey(self) -> None:
-        """分发专属 Key"""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 key.txt", "", "Text (*.txt)",
-        )
-        if not path:
-            return
-        try:
-            with open(path, encoding="utf-8") as f:
-                key = f.read().strip()
-        except OSError as e:
-            InfoBar.error(
-                "读取失败", str(e),
-                parent=self, position=InfoBarPosition.TOP, duration=5000,
-            )
-            return
-        ips, selected = self._getTargetIPs()
-        if not ips:
-            InfoBar.warning(
-                "提示", "没有在线节点",
-                parent=self, position=InfoBarPosition.TOP, duration=2000,
-            )
-            return
-        scope = f"{'选中' if selected else '在线'}"
-        self._tcp.broadcast(ips, TcpCommand.UPDATE_KEY, key)
-        self._nm.add_history("分发卡密", f"{len(ips)} 个{scope}节点")
-        InfoBar.success(
-            "卡密已分发", f"已发送到 {len(ips)} 个{scope}节点",
-            parent=self, position=InfoBarPosition.TOP, duration=3000,
-        )
-
     def _startExeOnAll(self) -> None:
         """启动/重启脚本"""
         ips, selected = self._getTargetIPs()
@@ -1447,6 +1427,31 @@ class BigScreenInterface(ScrollArea):
                 )
             )
 
+            # 卡密操作
+            if self._kami_db:
+                menu.addSeparator()
+                selected_rows = self.table.selectionModel().selectedRows()
+                if len(selected_rows) > 1:
+                    # 多选 → 批量分配
+                    menu.addAction(
+                        Action(
+                            FIF.LABEL,
+                            f"批量分配卡密 ({len(selected_rows)} 节点)",
+                            triggered=self._batchAssignKamiFromSelection,
+                        )
+                    )
+                else:
+                    # 单选 → 仅当未绑定时显示
+                    bound_kami = self._kami_db.get_kami_for_node(machine_name)
+                    if not bound_kami:
+                        menu.addAction(
+                            Action(
+                                FIF.LABEL,
+                                "分配卡密",
+                                triggered=lambda: self._assignNodeKami(machine_name, ip),
+                            )
+                        )
+
         menu.exec(self.table.viewport().mapToGlobal(pos), aniType=MenuAnimationType.NONE)
 
     def _copyText(self, text: str) -> None:
@@ -1477,6 +1482,87 @@ class BigScreenInterface(ScrollArea):
             "已设置", f"{machine_name} → 分组 '{group}'",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
+
+    def _assignNodeKami(self, machine_name: str, ip: str) -> None:
+        """手动为节点分配卡密"""
+        if not self._kami_db:
+            return
+        kami = self._kami_db.find_available_kami()
+        if kami is None:
+            InfoBar.warning(
+                "无可用卡密", "没有可分配的已激活卡密",
+                parent=self, position=InfoBarPosition.TOP, duration=3000,
+            )
+            return
+        if self._kami_db.bind_node(kami.id, machine_name):
+            self._tcp.send(ip, TcpCommand.PUSH_KAMI, kami.kami_code)
+            InfoBar.success(
+                "已分配", f"{machine_name} ← {kami.kami_code[:8]}…",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+        else:
+            InfoBar.warning(
+                "分配失败", "该节点可能已绑定此卡密",
+                parent=self, position=InfoBarPosition.TOP, duration=3000,
+            )
+
+    def _batchAssignKami(self) -> None:
+        """批量为选中/全部在线节点分配卡密，已绑定的跳过"""
+        if not self._kami_db:
+            return
+        nodes, is_sel = self._getSelectedOnlineNodes()
+        if not nodes:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        assigned, skipped = self._doBatchAssignKami(nodes)
+        scope = "选中" if is_sel else "全部在线"
+        msg = f"{scope}节点: 分配 {assigned} 个, 跳过 {skipped} 个(已绑定)"
+        InfoBar.success(
+            "批量分配完成", msg,
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _batchAssignKamiFromSelection(self) -> None:
+        """右键菜单: 为选中行的在线节点批量分配卡密"""
+        if not self._kami_db:
+            return
+        selected_rows = self.table.selectionModel().selectedRows()
+        nodes = []
+        for idx in selected_rows:
+            item = self.table.item(idx.row(), 1)
+            if not item:
+                continue
+            node = self._nm.nodes.get(item.text())
+            if node and node.status not in ("离线", "断连"):
+                nodes.append(node)
+        if not nodes:
+            return
+        assigned, skipped = self._doBatchAssignKami(nodes)
+        msg = f"选中 {len(nodes)} 节点: 分配 {assigned} 个, 跳过 {skipped} 个(已绑定)"
+        InfoBar.success(
+            "批量分配完成", msg,
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _doBatchAssignKami(self, nodes: list) -> tuple[int, int]:
+        """核心批量分配逻辑，返回 (assigned, skipped)"""
+        assigned = 0
+        skipped = 0
+        for node in nodes:
+            existing = self._kami_db.get_kami_for_node(node.machine_name)
+            if existing:
+                skipped += 1
+                continue
+            kami = self._kami_db.find_available_kami()
+            if kami is None:
+                break
+            if self._kami_db.bind_node(kami.id, node.machine_name):
+                self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
+                assigned += 1
+        return assigned, skipped
 
     def _singleNodeCmd(self, ip: str, cmd: TcpCommand, label: str) -> None:
         """单节点发送命令"""
