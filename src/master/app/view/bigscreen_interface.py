@@ -90,7 +90,7 @@ class _BalanceWorker(QThread):
 
 
 _NODE_HEADERS = [
-    "", "机器名", "IP地址", "卡密", "等级", "金币",
+    "", "机器名", "IP地址", "卡密", "账号", "等级", "金币",
     "运行时间", "运行状态", "CPU%", "内存%",
 ]
 
@@ -225,9 +225,6 @@ class BigScreenInterface(ScrollArea):
 
         StyleSheet.BIGSCREEN_INTERFACE.apply(self)
 
-        # 排序后重建行号映射，防止 _row_map 失效
-        self.table.horizontalHeader().sortIndicatorChanged.connect(self._rebuildRowMap)
-
         # 节点表格防抖刷新定时器
         self._tableRefreshTimer = QTimer(self)
         self._tableRefreshTimer.setSingleShot(True)
@@ -342,8 +339,7 @@ class BigScreenInterface(ScrollArea):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True)
-        table.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # 默认按机器名升序
+        table.setSortingEnabled(False)
         table.verticalHeader().hide()
 
         header = table.horizontalHeader()
@@ -354,8 +350,9 @@ class BigScreenInterface(ScrollArea):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(3, 100)
-        for col in range(4, len(_NODE_HEADERS)):
-            if col == 7:  # 运行状态
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        for col in range(5, len(_NODE_HEADERS)):
+            if col == 8:  # 运行状态
                 header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
                 table.setColumnWidth(col, 320)
             else:
@@ -930,14 +927,13 @@ class BigScreenInterface(ScrollArea):
         pending = self._pending_updates.copy()
         self._pending_updates.clear()
 
-        # 结构变化（新增/删除节点）→ 全量重建
+        # 结构变化（新增/删除节点）→ 全量重建（按机器名排序）
         if visible_names != table_names:
+            nodes = sorted(nodes, key=lambda n: n.machine_name)
             self.table.setUpdatesEnabled(False)
-            self.table.setSortingEnabled(False)
             self.table.setRowCount(len(nodes))
             for row, node in enumerate(nodes):
                 self._setRowData(row, node)
-            self.table.setSortingEnabled(True)
             self.table.setUpdatesEnabled(True)
             self._rebuildRowMap()
             return
@@ -964,6 +960,7 @@ class BigScreenInterface(ScrollArea):
             node.machine_name,
             node.ip,
             kami_display,
+            node.current_account if node.game_state else "",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
             self._format_elapsed(node.elapsed),
@@ -994,7 +991,7 @@ class BigScreenInterface(ScrollArea):
                 item.setText(text)
 
         # 运行状态列着色（仅变化时）
-        state_item = self.table.item(row, 7)
+        state_item = self.table.item(row, 8)
         if state_item:
             color = _STATUS_COLORS.get(node.status, _STATUS_COLOR_DEFAULT)
             if state_item.foreground().color() != color:
@@ -1004,12 +1001,12 @@ class BigScreenInterface(ScrollArea):
         master_key = self._pool.get_config("api_key")
         if master_key and state_item:
             if not node.token_key:
-                warn_text = texts[7] + " ⚠缺Key"
+                warn_text = texts[8] + " ⚠缺Key"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#c62828"))
             elif node.token_key != master_key:
-                warn_text = texts[7] + " ⚠Key不一致"
+                warn_text = texts[8] + " ⚠Key不一致"
                 if state_item.text() != warn_text:
                     state_item.setText(warn_text)
                     state_item.setForeground(QColor("#e65100"))
