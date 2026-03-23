@@ -20,6 +20,7 @@ from slave.heartbeat import HeartbeatService
 from slave.ipc_receiver import LocalIpcReceiver
 from slave.log_reporter import LogReporter
 from slave.logging_utils import configure_slave_logging, get_logger
+from slave.process_manager import ProcessManager
 from slave.state_store import RuntimeStatus, SlaveStateStore
 
 logger = get_logger(__name__)
@@ -154,17 +155,24 @@ class SlaveBackend(QThread):
     async def _process_monitor(self) -> None:
         """每 10s 检测 TestDemo.exe 是否存活，状态变化时上报 master。"""
         was_running = False
+        pm = ProcessManager(str(self._base_dir))
+        testdemo_down_since: float | None = None  # TestDemo 挂掉的时间
+        _RECOVERY_SEC = 60  # 给 TestDemo 60 秒恢复期
         while self._running:
-            running = self._is_testdemo_running()
+            testdemo_alive = self._is_process_alive("testdemo")
+            launcher_alive = self._is_process_alive("trianglealpha.launcher")
+            running = testdemo_alive or launcher_alive
             self._script_running = running
             self.script_status.emit(running)
 
             if running and not was_running:
                 self._script_started_at = time.time()
+                testdemo_down_since = None
                 logger.info("检测到 TestDemo 启动")
 
             if was_running and not running:
                 self._script_started_at = None
+                testdemo_down_since = None
                 try:
                     self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
                     self._state_store.clear_runtime_status()
@@ -172,8 +180,59 @@ class SlaveBackend(QThread):
                 except Exception:
                     logger.exception("发送脚本停止状态失败")
 
+            # TestDemo 挂了但 Launcher 还在 → 等恢复期后重启 Launcher
+            if not testdemo_alive and launcher_alive:
+                if testdemo_down_since is None:
+                    testdemo_down_since = time.time()
+                elif time.time() - testdemo_down_since >= _RECOVERY_SEC:
+                    logger.warning("TestDemo 已挂超过 %ds，重启 Launcher", _RECOVERY_SEC)
+                    testdemo_down_since = None
+                    try:
+                        await pm.kill_by_name("TriangleAlpha.Launcher")
+                        await asyncio.sleep(2)
+                        await pm.start_launcher()
+                    except Exception:
+                        logger.exception("重启 Launcher 失败")
+            else:
+                testdemo_down_since = None
+
             was_running = running
+            # 关闭弹窗浏览器（游戏安全中心等无用页面）
+            self._kill_browsers()
             await asyncio.sleep(10)
+
+    @staticmethod
+    def _is_process_alive(name: str) -> bool:
+        """检测指定进程是否存活（不区分大小写，忽略 .exe 后缀）"""
+        target = name.lower()
+        for proc in psutil.process_iter(["name"], ad_value=""):
+            try:
+                pname = proc.info.get("name", "")
+                if pname and pname.lower().removesuffix(".exe") == target:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return False
+
+    _BROWSER_NAMES = {"msedge", "chrome", "firefox", "iexplore", "browser"}
+
+    @staticmethod
+    def _kill_browsers() -> None:
+        """关闭浏览器进程（游戏安全中心等弹窗页面）"""
+        killed = 0
+        for proc in psutil.process_iter(["name"], ad_value=""):
+            try:
+                pname = proc.info.get("name", "")
+                if not pname:
+                    continue
+                base = pname.lower().removesuffix(".exe")
+                if base in SlaveBackend._BROWSER_NAMES:
+                    proc.kill()
+                    killed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        if killed:
+            logger.info("已关闭 %d 个浏览器进程", killed)
 
     @staticmethod
     def _is_testdemo_running() -> bool:
