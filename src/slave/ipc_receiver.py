@@ -33,7 +33,7 @@ def parse_ipc_status(data: bytes) -> dict[str, str] | None:
     if len(parts) < 7 or parts[0] != "STATUS":
         return None
     return {
-        "account": parts[2],
+        "account": parts[2] if parts[2].isascii() else "",
         "level": parts[3],
         "jinbi": parts[4],
         "status_text": parts[5],

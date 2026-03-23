@@ -960,7 +960,7 @@ class BigScreenInterface(ScrollArea):
             node.machine_name,
             node.ip,
             kami_display,
-            node.current_account if node.game_state else "",
+            node.current_account if node.game_state and node.current_account and node.current_account.isascii() else "",
             str(node.level) if node.level else "--",
             node.jin_bi if node.jin_bi != "0" else "--",
             self._format_elapsed(node.elapsed),

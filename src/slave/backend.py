@@ -211,6 +211,10 @@ class SlaveBackend(QThread):
         if self._script_started_at is not None:
             default_elapsed = str(max(0, int(time.time() - self._script_started_at)))
 
+        # 始终从 accounts.json 获取当前活跃账号（IsActive=true）
+        active_acc = self._state_store.load_active_account(default_elapsed=default_elapsed)
+        active_name = active_acc.current_account if active_acc else ""
+
         # ── IPC 优先：从 TestDemo 本地 UDP 推送获取实时数据 ──
         ipc_data, ipc_age = self._ipc.snapshot()
         if ipc_data is not None and ipc_age < IPC_TIMEOUT:
@@ -222,7 +226,7 @@ class SlaveBackend(QThread):
                 state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
-                current_account=ipc_data.get("account", ""),
+                current_account=active_name,
                 elapsed=ipc_data.get("elapsed", default_elapsed),
                 status_text=raw_status,
             )
@@ -235,7 +239,7 @@ class SlaveBackend(QThread):
                 state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
-                current_account=ipc_data.get("account", ""),
+                current_account=active_name,
                 elapsed=ipc_data.get("elapsed", default_elapsed),
                 status_text=raw_status,
             )
@@ -243,9 +247,14 @@ class SlaveBackend(QThread):
         # ── 文件兜底：读 runtime_status.json ──
         snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
         if not snapshot.current_account:
-            active = self._state_store.load_active_account(default_elapsed=default_elapsed)
-            if active is not None:
-                snapshot = active
+            snapshot = RuntimeStatus(
+                state=snapshot.state,
+                level=snapshot.level,
+                jin_bi=snapshot.jin_bi,
+                current_account=active_name,
+                elapsed=snapshot.elapsed,
+                status_text=snapshot.status_text,
+            )
         if snapshot.state == GameState.SCRIPT_STOPPED:
             return RuntimeStatus(
                 state=GameState.RUNNING,
