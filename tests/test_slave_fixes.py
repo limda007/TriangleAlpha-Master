@@ -284,6 +284,32 @@ class TestM5SelfUpdate:
         assert str(exe_path) in helper_text
         assert str(update.pending_path) in helper_text
         assert "4321" in helper_text
+        assert "PYINSTALLER_RESET_ENVIRONMENT" in helper_text
+
+    def test_launch_self_update_helper_resets_pyinstaller_env(self, tmp_path):
+        from slave.self_update import PreparedSelfUpdate, launch_self_update_helper
+
+        update = PreparedSelfUpdate(
+            filename="TriangleAlpha-Slave.exe",
+            target_path=tmp_path / "TriangleAlpha-Slave.exe",
+            pending_path=tmp_path / "TriangleAlpha-Slave.exe.pending",
+            helper_path=tmp_path / "TriangleAlpha-Slave.exe.update.cmd",
+        )
+
+        with (
+            patch("slave.self_update.os.name", "nt"),
+            patch.dict(
+                "slave.self_update.os.environ",
+                {"_PYI_APPLICATION_HOME_DIR": "C:/Temp/_MEI123", "PATH": "C:/Windows/System32"},
+                clear=False,
+            ),
+            patch("slave.self_update.subprocess.Popen") as mock_popen,
+        ):
+            launch_self_update_helper(update)
+
+        env = mock_popen.call_args.kwargs["env"]
+        assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+        assert "_PYI_APPLICATION_HOME_DIR" not in env
 
     def test_handle_update_self_requests_shutdown(self, tmp_path):
         from common.protocol import ParsedTcpCommand

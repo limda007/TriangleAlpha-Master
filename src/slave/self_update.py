@@ -69,6 +69,11 @@ def launch_self_update_helper(update: PreparedSelfUpdate) -> None:
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for key in list(env):
+        if key.startswith("_PYI_"):
+            env.pop(key, None)
     subprocess.Popen(  # noqa: S603
         ["cmd.exe", "/c", str(update.helper_path)],
         stdin=subprocess.DEVNULL,
@@ -76,6 +81,7 @@ def launch_self_update_helper(update: PreparedSelfUpdate) -> None:
         stderr=subprocess.DEVNULL,
         close_fds=True,
         creationflags=creation_flags,
+        env=env,
     )
     logger.info("自更新 helper 已启动: %s", update.helper_path)
 
@@ -127,6 +133,7 @@ def _build_update_helper_script(target: Path, pending: Path, backup: Path, curre
         f'set "BACKUP={backup_str}"',
         f'set "TARGET_DIR={target_dir}"',
         f'set "WAIT_PID={current_pid}"',
+        'set "PYINSTALLER_RESET_ENVIRONMENT=1"',
         "",
         "for /l %%I in (1,1,120) do (",
         '    tasklist /FI "PID eq %WAIT_PID%" 2^>NUL | find /I "%WAIT_PID%" ^>NUL',
@@ -136,6 +143,7 @@ def _build_update_helper_script(target: Path, pending: Path, backup: Path, curre
         "goto cleanup",
         "",
         ":replace",
+        "timeout /t 2 /nobreak >NUL",
         "for /l %%I in (1,1,30) do (",
         '    if exist "%BACKUP%" del /f /q "%BACKUP%" >NUL 2^>^&1',
         '    if exist "%TARGET%" move /y "%TARGET%" "%BACKUP%" >NUL 2^>^&1',

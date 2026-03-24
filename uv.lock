@@ -3399,7 +3399,7 @@ wheels = [
 
 [[package]]
 name = "triangle-alpha-master"
-version = "1.0.37"
+version = "1.0.38"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
