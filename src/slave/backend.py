@@ -158,6 +158,8 @@ class SlaveBackend(QThread):
         pm = ProcessManager(str(self._base_dir))
         testdemo_down_since: float | None = None  # TestDemo 挂掉的时间
         _RECOVERY_SEC = 60  # 给 TestDemo 60 秒恢复期
+        _IPC_STALE_SEC = 60  # TestDemo IPC 静默超过此时间则重启 Launcher
+        ipc_restart_cooldown: float = 0  # 上次 IPC 触发重启的时间戳
         while self._running:
             testdemo_alive = self._is_process_alive("testdemo")
             launcher_alive = self._is_process_alive("trianglealpha.launcher")
@@ -195,6 +197,33 @@ class SlaveBackend(QThread):
                         logger.exception("重启 Launcher 失败")
             else:
                 testdemo_down_since = None
+
+            # TestDemo 存活但 IPC 静默超过阈值 → 可能卡死，重启 Launcher
+            # 两种情形均触发：① 曾收到 IPC 但超时 ② 从未收到 IPC 且进程已运行 ≥ 阈值
+            ipc_data, ipc_age = self._ipc.snapshot()
+            now = time.time()
+            ipc_ever_received = ipc_data is not None
+            script_running_secs = (
+                now - self._script_started_at if self._script_started_at else 0
+            )
+            ipc_silent = ipc_ever_received and ipc_age >= _IPC_STALE_SEC
+            ipc_never_started = not ipc_ever_received and script_running_secs >= _IPC_STALE_SEC
+            if (
+                testdemo_alive
+                and (ipc_silent or ipc_never_started)
+                and now - ipc_restart_cooldown >= 120  # 2 分钟冷却，防连续重启
+            ):
+                if ipc_never_started:
+                    logger.warning("TestDemo 运行 %.0fs 从未发送 IPC，疑似卡死，重启 Launcher", script_running_secs)
+                else:
+                    logger.warning("TestDemo IPC 静默 %.0fs，疑似卡死，重启 Launcher", ipc_age)
+                ipc_restart_cooldown = now
+                try:
+                    await pm.kill_by_name("TriangleAlpha.Launcher")
+                    await asyncio.sleep(2)
+                    await pm.start_launcher()
+                except Exception:
+                    logger.exception("重启 Launcher 失败 (IPC 超时)")
 
             was_running = running
             # 关闭弹窗浏览器（游戏安全中心等无用页面）
