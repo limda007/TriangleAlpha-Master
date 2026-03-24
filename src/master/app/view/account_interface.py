@@ -36,7 +36,7 @@ from qfluentwidgets import (
 from master.app.components.stat_card import StatCard
 from master.app.core.account_db import AccountDB
 
-_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
+_HEADERS = ["账号", "密码", "邮箱", "邮箱密码", "状态", "分配机器", "等级", "金币", "登录时间", "完成时间"]
 _MASK = "••••••••"
 _SECRET_COLS = {1, 3}  # password + email password columns
 _STATUS_COL = 4
@@ -150,7 +150,7 @@ class AccountInterface(ScrollArea):
                 acc.assigned_machine,
                 str(acc.level) if acc.level else "",
                 acc.jin_bi if acc.jin_bi != "0" else "",
-                acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else "",
+                acc.last_login_at.strftime("%Y-%m-%d %H:%M") if acc.last_login_at else "",
                 acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
             ]
             for col, text in enumerate(vals):

@@ -1,14 +1,17 @@
 """Master 核心组件联调测试 — 验证所有修复项"""
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from common.models import PLATFORM_ACCOUNT_HEADER, AccountInfo, AccountStatus
 from common.protocol import TcpCommand
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
+from master.app.core.platform_syncer import PlatformSyncer
 
 # ── C1: themeMode 配置项 ──
 
@@ -203,12 +206,14 @@ class TestM7ExportTimestamp:
         pool.complete("VM-01", level=30)
         # 直接 SQL 设置精确时间戳（complete() 使用 datetime.now()）
         pool._conn.execute(
-            "UPDATE accounts SET completed_at='2026-03-18 14:30:00' WHERE username='user1'"
+            "UPDATE accounts SET last_login_at='2026-03-18 10:30:00', "
+            "completed_at='2026-03-18 14:30:00' WHERE username='user1'"
         )
         pool._conn.commit()
 
         result = pool.export_completed()
         assert "2026-03-18 14:30:00" in result
+        assert "2026-03-18 10:30:00" in result
         assert "----30----" in result
         pool.close()
 
@@ -226,6 +231,33 @@ class TestM7ExportTimestamp:
         result = pool.export_completed()
         assert "----无" in result
         pool.close()
+
+
+class TestPlatformUploadFormat:
+    """验证销售平台上传文本采用表头 + 10 字段数据行格式"""
+
+    def test_build_upload_text_matches_sales_platform_format(self) -> None:
+        account = AccountInfo(
+            username="754047983304983",
+            password="xozo9LLEYKXEe",
+            bind_email="AustinHill9146@outlook.com",
+            bind_email_password="afxgc1070",
+            status=AccountStatus.COMPLETED,
+            level=18,
+            jin_bi="2390K",
+            notes="无",
+            last_login_at=datetime(2026, 3, 24, 10, 8, 39),
+            completed_at=datetime(2026, 3, 24, 13, 8, 39),
+        )
+
+        result = PlatformSyncer._build_upload_text([account])
+
+        assert result == (
+            f"{PLATFORM_ACCOUNT_HEADER}\n"
+            "754047983304983----xozo9LLEYKXEe----AustinHill9146@outlook.com----"
+            "afxgc1070----18----2390K----正常----无----2026-03-24 10:08:39----"
+            "2026-03-24 13:08:39"
+        )
 
 
 # ── M10-fix: history 上限 ──

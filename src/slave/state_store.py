@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -39,6 +40,10 @@ class SlaveStateStore:
     @property
     def runtime_status_path(self) -> Path:
         return self._base_dir / "runtime_status.json"
+
+    @property
+    def account_login_state_path(self) -> Path:
+        return self._base_dir / "account_login_state.json"
 
     def load_settings(self) -> SlaveSettings:
         data = self._read_json(self.settings_path)
@@ -100,6 +105,9 @@ class SlaveStateStore:
         data = self._read_json(self._base_dir / "accounts.json")
         if not isinstance(data, list):
             return []
+        login_state = self._load_account_login_state()
+        seen_usernames: set[str] = set()
+        state_changed = False
         result: list[dict[str, object]] = []
         for acc in data:
             if not isinstance(acc, dict):
@@ -107,6 +115,12 @@ class SlaveStateStore:
             username = self._as_text(acc.get("Username"), "")
             if not username:
                 continue
+            seen_usernames.add(username)
+            is_active = bool(acc.get("IsActive"))
+            last_login_at, changed = self._touch_login_state(
+                login_state, username, is_active,
+            )
+            state_changed = state_changed or changed
             result.append({
                 "username": username,
                 "password": self._as_text(acc.get("Password"), ""),
@@ -118,8 +132,17 @@ class SlaveStateStore:
                     "0",
                 ),
                 "is_banned": bool(acc.get("IsBanned")),
-                "is_active": bool(acc.get("IsActive")),
+                "is_active": is_active,
+                "login_at": last_login_at,
             })
+        for username, state in login_state.items():
+            if username in seen_usernames:
+                continue
+            if bool(state.get("was_active")):
+                state["was_active"] = False
+                state_changed = True
+        if state_changed:
+            self._save_account_login_state(login_state)
         return result
 
     def clear_runtime_status(self) -> None:
@@ -136,6 +159,51 @@ class SlaveStateStore:
         except (json.JSONDecodeError, OSError) as err:
             logger.warning("读取 JSON 文件失败: %s (%s)", path.name, err)
             return None
+
+    def _load_account_login_state(self) -> dict[str, dict[str, object]]:
+        data = self._read_json(self.account_login_state_path)
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for username, raw_state in data.items():
+            if not isinstance(username, str) or not username.strip():
+                continue
+            if not isinstance(raw_state, dict):
+                continue
+            result[username.strip()] = {
+                "last_login_at": self._as_text(raw_state.get("last_login_at"), ""),
+                "was_active": bool(raw_state.get("was_active")),
+            }
+        return result
+
+    def _save_account_login_state(self, state: dict[str, dict[str, object]]) -> None:
+        self.account_login_state_path.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _touch_login_state(
+        self, state: dict[str, dict[str, object]], username: str, is_active: bool,
+    ) -> tuple[str, bool]:
+        current = state.get(username, {})
+        last_login_at = self._as_text(current.get("last_login_at"), "")
+        was_active = bool(current.get("was_active"))
+        if is_active and not was_active:
+            last_login_at = self._now_text()
+        changed = (
+            last_login_at != self._as_text(current.get("last_login_at"), "")
+            or was_active != is_active
+        )
+        if changed:
+            state[username] = {
+                "last_login_at": last_login_at,
+                "was_active": is_active,
+            }
+        return last_login_at, changed
+
+    @staticmethod
+    def _now_text() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def _as_text(value: object, default: str) -> str:

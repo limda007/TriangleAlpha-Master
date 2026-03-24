@@ -5,6 +5,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from common.protocol import GameState
 from slave.backend import SlaveBackend
 from slave.state_store import SlaveStateStore
@@ -73,7 +75,16 @@ class TestSlaveStateStore:
         """load_all_game_accounts 也支持 JinBi 别名。"""
         store = SlaveStateStore(tmp_path)
         (tmp_path / "accounts.json").write_text(
-            json.dumps([{"Username": "u1", "Password": "p1", "CurrentLevel": 5, "JinBi": "3333", "IsBanned": False, "IsActive": True}]),
+            json.dumps(
+                [{
+                    "Username": "u1",
+                    "Password": "p1",
+                    "CurrentLevel": 5,
+                    "JinBi": "3333",
+                    "IsBanned": False,
+                    "IsActive": True,
+                }],
+            ),
             encoding="utf-8",
         )
         result = store.load_all_game_accounts()
@@ -148,6 +159,8 @@ class TestSlaveStateStore:
         assert result[0]["jin_bi"] == "50000"
         assert result[0]["is_banned"] is False
         assert result[0]["is_active"] is True
+        assert isinstance(result[0]["login_at"], str)
+        assert result[0]["login_at"]
         assert result[1]["username"] == "user2"
         assert result[1]["is_banned"] is True
 
@@ -155,6 +168,77 @@ class TestSlaveStateStore:
         """文件不存在时返回空列表"""
         store = SlaveStateStore(tmp_path)
         assert store.load_all_game_accounts() == []
+
+    def test_load_all_game_accounts_records_login_time_for_new_active_account(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        store = SlaveStateStore(tmp_path)
+        monkeypatch.setattr(
+            SlaveStateStore,
+            "_now_text",
+            staticmethod(lambda: "2026-03-24 10:00:00"),
+        )
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "u1", "IsActive": True}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        result = store.load_all_game_accounts()
+
+        assert result[0]["login_at"] == "2026-03-24 10:00:00"
+        state = json.loads((tmp_path / "account_login_state.json").read_text(encoding="utf-8"))
+        assert state["u1"]["last_login_at"] == "2026-03-24 10:00:00"
+        assert state["u1"]["was_active"] is True
+
+    def test_load_all_game_accounts_keeps_login_time_while_account_stays_active(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "account_login_state.json").write_text(
+            json.dumps(
+                {"u1": {"last_login_at": "2026-03-24 10:00:00", "was_active": True}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            SlaveStateStore,
+            "_now_text",
+            staticmethod(lambda: "2026-03-24 11:30:00"),
+        )
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "u1", "IsActive": True}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        result = store.load_all_game_accounts()
+
+        assert result[0]["login_at"] == "2026-03-24 10:00:00"
+
+    def test_load_all_game_accounts_updates_login_time_on_relogin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "account_login_state.json").write_text(
+            json.dumps(
+                {"u1": {"last_login_at": "2026-03-24 10:00:00", "was_active": False}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            SlaveStateStore,
+            "_now_text",
+            staticmethod(lambda: "2026-03-24 12:15:00"),
+        )
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "u1", "IsActive": True}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        result = store.load_all_game_accounts()
+
+        assert result[0]["login_at"] == "2026-03-24 12:15:00"
 
 
 class TestSlaveBackendStatusSnapshot:

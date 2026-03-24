@@ -311,6 +311,8 @@ class SlaveBackend(QThread):
         # 始终从 accounts.json 获取当前活跃账号（IsActive=true）
         active_acc = self._state_store.load_active_account(default_elapsed=default_elapsed)
         active_name = active_acc.current_account if active_acc else ""
+        active_level = active_acc.level if active_acc else 0
+        active_jin_bi = active_acc.jin_bi if active_acc else "0"
 
         # ── IPC 优先：从 TestDemo 本地 UDP 推送获取实时数据 ──
         ipc_data, ipc_age = self._ipc.snapshot()
@@ -319,11 +321,12 @@ class SlaveBackend(QThread):
             self._last_ipc_jin_bi = ipc_data.get("jinbi", "0")
             raw_status = ipc_data.get("status_text", "")
             level_raw = ipc_data.get("level", "0")
+            current_account = str(ipc_data.get("account") or ipc_data.get("desc") or active_name)
             return RuntimeStatus(
                 state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
-                current_account=active_name,
+                current_account=current_account,
                 elapsed=ipc_data.get("elapsed", default_elapsed),
                 status_text=raw_status,
             )
@@ -332,22 +335,23 @@ class SlaveBackend(QThread):
         if ipc_data is not None and self._last_ipc_jin_bi != "0":
             raw_status = ipc_data.get("status_text", "")
             level_raw = ipc_data.get("level", "0")
+            current_account = str(ipc_data.get("account") or ipc_data.get("desc") or active_name)
             return RuntimeStatus(
                 state=self._map_ipc_status(raw_status),
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
-                current_account=active_name,
+                current_account=current_account,
                 elapsed=ipc_data.get("elapsed", default_elapsed),
                 status_text=raw_status,
             )
 
         # ── 文件兜底：读 runtime_status.json ──
         snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
-        if not snapshot.current_account:
+        if not snapshot.current_account and active_acc is not None:
             snapshot = RuntimeStatus(
                 state=snapshot.state,
-                level=snapshot.level,
-                jin_bi=snapshot.jin_bi,
+                level=snapshot.level or active_level,
+                jin_bi=snapshot.jin_bi if snapshot.jin_bi != "0" else active_jin_bi,
                 current_account=active_name,
                 elapsed=snapshot.elapsed,
                 status_text=snapshot.status_text,

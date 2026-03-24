@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from common.models import AccountInfo, AccountStatus
+from common.models import EXPORT_ACCOUNT_HEADER, AccountInfo, AccountStatus
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS accounts (
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     jin_bi           TEXT    NOT NULL DEFAULT '0',
     completed_at     TEXT    DEFAULT NULL,
     uploaded_at      TEXT    DEFAULT NULL,
+    last_login_at    TEXT    DEFAULT NULL,
     created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -72,6 +73,8 @@ class AccountDB(QObject):
         self._migrate_legacy_status()
         # 迁移：添加 uploaded_at 列
         self._ensure_uploaded_at_column()
+        # 迁移：添加 last_login_at 列
+        self._ensure_last_login_at_column()
         # 缓存计数
         self._total = 0
         self._available = 0
@@ -276,9 +279,11 @@ class AccountDB(QObject):
             level_raw = str(acc.get("level", "0"))
             level = int(level_raw) if level_raw.isdigit() else 0
             jin_bi = str(acc.get("jin_bi", "0"))
+            login_at = self._normalize_timestamp_text(acc.get("login_at"))
 
             existing = self._conn.execute(
-                "SELECT id, status FROM accounts WHERE username = ?",
+                "SELECT id, status, level, jin_bi, last_login_at "
+                "FROM accounts WHERE username = ?",
                 (username,),
             ).fetchone()
 
@@ -296,21 +301,25 @@ class AccountDB(QObject):
                 self._conn.execute(
                     "INSERT INTO accounts "
                     "(username, password, bind_email, bind_email_pwd, "
-                    " status, level, jin_bi, completed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    " status, level, jin_bi, completed_at, last_login_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (username, str(acc.get("password", "")),
                      str(acc.get("bind_email", "")),
                      str(acc.get("bind_email_pwd", "")),
-                     status, level, jin_bi, now),
+                     status, level, jin_bi, now, login_at or None),
                 )
                 inserted += 1
                 continue
 
+            last_login_at = self._merge_timestamp_text(existing["last_login_at"], login_at)
+            current_login_at = self._normalize_timestamp_text(existing["last_login_at"]) or None
+
             # 已有账号：封禁检测
             if is_banned and existing["status"] != "已封禁":
                 self._conn.execute(
-                    "UPDATE accounts SET status='已封禁' WHERE id = ?",
-                    (existing["id"],),
+                    "UPDATE accounts SET status='已封禁', last_login_at=? "
+                    "WHERE id = ?",
+                    (last_login_at, existing["id"]),
                 )
                 updated += 1
                 continue
@@ -319,8 +328,9 @@ class AccountDB(QObject):
             if is_active and existing["status"] == "已完成":
                 self._conn.execute(
                     "UPDATE accounts SET status='空闲中', assigned_machine='', "
-                    "completed_at=NULL, level=?, jin_bi=? WHERE id = ?",
-                    (level, jin_bi, existing["id"]),
+                    "completed_at=NULL, level=?, jin_bi=?, last_login_at=? "
+                    "WHERE id = ?",
+                    (level, jin_bi, last_login_at, existing["id"]),
                 )
                 updated += 1
                 continue
@@ -332,17 +342,26 @@ class AccountDB(QObject):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     self._conn.execute(
                         "UPDATE accounts SET status='已完成', level=?, jin_bi=?, "
-                        "completed_at=? WHERE id = ?",
-                        (level, jin_bi, now, existing["id"]),
+                        "completed_at=?, last_login_at=? WHERE id = ?",
+                        (level, jin_bi, now, last_login_at, existing["id"]),
                     )
+                    updated += 1
+                elif self._update_last_login_at(existing["id"], last_login_at):
                     updated += 1
                 continue
 
-            self._conn.execute(
-                "UPDATE accounts SET level = ?, jin_bi = ? WHERE id = ?",
-                (level, jin_bi, existing["id"]),
+            row_changed = (
+                int(existing["level"]) != level
+                or str(existing["jin_bi"]) != jin_bi
+                or last_login_at != current_login_at
             )
-            updated += 1
+            if row_changed:
+                self._conn.execute(
+                    "UPDATE accounts SET level = ?, jin_bi = ?, last_login_at = ? "
+                    "WHERE id = ?",
+                    (level, jin_bi, last_login_at, existing["id"]),
+                )
+                updated += 1
 
         if inserted or updated:
             self._conn.commit()
@@ -409,21 +428,21 @@ class AccountDB(QObject):
         return total
 
     def export_completed(self, mark_fetched: bool = False) -> str:
-        """导出已完成账号，对齐原版 9 字段格式（含表头）
+        """导出已完成账号，使用提号 10 字段格式（含表头）
 
         mark_fetched=True 时，导出后将状态流转为 '已取号'。
         """
         cur = self._conn.execute(
             "SELECT * FROM accounts WHERE status='已完成' ORDER BY id",
         )
-        header = "账号----密码----邮箱----邮箱密码----等级----金币----状态----备注----完成时间"
-        lines: list[str] = [header]
+        lines: list[str] = [EXPORT_ACCOUNT_HEADER]
         for row in cur.fetchall():
-            time_str = row["completed_at"] or "无"
+            login_time_str = row["last_login_at"] or "无"
+            completed_time_str = row["completed_at"] or "无"
             lines.append(
                 f"{row['username']}----{row['password']}----{row['bind_email']}----"
                 f"{row['bind_email_pwd']}----{row['level']}----{row['jin_bi']}----"
-                f"正常----无----{time_str}"
+                f"正常----无----{login_time_str}----{completed_time_str}"
             )
         if mark_fetched:
             self._conn.execute("UPDATE accounts SET status='已取号' WHERE status='已完成'")
@@ -435,14 +454,14 @@ class AccountDB(QObject):
     def export_all(self) -> str:
         """导出所有账号（含表头），不改变状态。"""
         cur = self._conn.execute("SELECT * FROM accounts ORDER BY id")
-        header = "账号----密码----邮箱----邮箱密码----等级----金币----状态----备注----完成时间"
-        lines: list[str] = [header]
+        lines: list[str] = [EXPORT_ACCOUNT_HEADER]
         for row in cur.fetchall():
-            time_str = row["completed_at"] or "无"
+            login_time_str = row["last_login_at"] or "无"
+            completed_time_str = row["completed_at"] or "无"
             lines.append(
                 f"{row['username']}----{row['password']}----{row['bind_email']}----"
                 f"{row['bind_email_pwd']}----{row['level']}----{row['jin_bi']}----"
-                f"{row['status']}----{row['notes']}----{time_str}"
+                f"{row['status']}----{row['notes']}----{login_time_str}----{completed_time_str}"
             )
         return "\n".join(lines)
 
@@ -498,6 +517,16 @@ class AccountDB(QObject):
             )
             self._conn.commit()
 
+    def _ensure_last_login_at_column(self) -> None:
+        """迁移：为已有数据库添加 last_login_at 列"""
+        cur = self._conn.execute("PRAGMA table_info(accounts)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "last_login_at" not in columns:
+            self._conn.execute(
+                "ALTER TABLE accounts ADD COLUMN last_login_at TEXT DEFAULT NULL"
+            )
+            self._conn.commit()
+
     def _migrate_legacy_status(self) -> None:
         """修正旧版数据库中的状态值和 CHECK 约束。"""
         if self._schema_requires_rebuild():
@@ -538,6 +567,7 @@ class AccountDB(QObject):
                 jin_bi           TEXT    NOT NULL DEFAULT '0',
                 completed_at     TEXT    DEFAULT NULL,
                 uploaded_at      TEXT    DEFAULT NULL,
+                last_login_at    TEXT    DEFAULT NULL,
                 created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
                 updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
             );
@@ -583,7 +613,48 @@ class AccountDB(QObject):
         self._completed = counts.get("已完成", 0)
 
     @staticmethod
+    def _normalize_timestamp_text(raw: object) -> str:
+        if raw is None:
+            return ""
+        value = str(raw).strip()
+        if not value:
+            return ""
+        with contextlib.suppress(ValueError):
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+        return ""
+
+    @staticmethod
+    def _merge_timestamp_text(existing: object, incoming: str) -> str | None:
+        current = AccountDB._normalize_timestamp_text(existing)
+        if not current:
+            return incoming or None
+        if not incoming:
+            return current
+        return max(current, incoming)
+
+    def _update_last_login_at(self, account_id: int, last_login_at: str | None) -> bool:
+        row = self._conn.execute(
+            "SELECT last_login_at FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        current = self._normalize_timestamp_text(row["last_login_at"] if row else None)
+        target = self._normalize_timestamp_text(last_login_at)
+        if current == target:
+            return False
+        self._conn.execute(
+            "UPDATE accounts SET last_login_at = ? WHERE id = ?",
+            (target or None, account_id),
+        )
+        return True
+
+    @staticmethod
     def _row_to_info(row: sqlite3.Row) -> AccountInfo:
+        last_login_at = None
+        if row["last_login_at"]:
+            with contextlib.suppress(ValueError):
+                last_login_at = datetime.strptime(
+                    row["last_login_at"], "%Y-%m-%d %H:%M:%S",
+                )
         completed_at = None
         if row["completed_at"]:
             with contextlib.suppress(ValueError):
@@ -612,6 +683,7 @@ class AccountDB(QObject):
             assigned_machine=row["assigned_machine"],
             level=row["level"],
             jin_bi=row["jin_bi"],
+            last_login_at=last_login_at,
             completed_at=completed_at,
             updated_at=updated_at,
             created_at=created_at,

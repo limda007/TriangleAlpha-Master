@@ -215,10 +215,14 @@ class TestExport:
         db.import_fresh("u1----p1----e1----ep1\nu2----p2")
         db.allocate("VM-01")
         db.complete("VM-01", level=20)
+        db._conn.execute(
+            "UPDATE accounts SET last_login_at='2026-03-24 09:00:00' WHERE username='u1'"
+        )
+        db._conn.commit()
         text = db.export_completed()
         lines = text.splitlines()
         assert lines[0].startswith("账号----密码")  # 表头
-        assert "u1----p1----e1----ep1----20----0----正常----无----" in text
+        assert "u1----p1----e1----ep1----20----0----正常----无----2026-03-24 09:00:00----" in text
         # u2 未完成，不在导出中
         assert "u2" not in text
 
@@ -233,6 +237,10 @@ class TestExport:
         db.import_fresh("u1----p1\nu2----p2")
         db.allocate("VM-01")
         db.complete("VM-01", level=20)
+        db._conn.execute(
+            "UPDATE accounts SET last_login_at='2026-03-24 09:00:00' WHERE username='u1'"
+        )
+        db._conn.commit()
         text = db.export_all()
         lines = text.splitlines()
         assert lines[0].startswith("账号----密码")  # 表头
@@ -241,6 +249,7 @@ class TestExport:
         assert "u2" in text
         assert "已完成" in text
         assert "空闲中" in text
+        assert "2026-03-24 09:00:00" in text
 
 
 class TestClear:
@@ -378,6 +387,16 @@ class TestUpsertFromSync:
         assert acc.status == AccountStatus.IDLE
         assert acc.assigned_machine == ""
 
+    def test_insert_new_account_preserves_login_time(self, db: AccountDB) -> None:
+        accounts = [
+            {"username": "u1", "level": 5, "jin_bi": "200",
+             "is_banned": False, "is_active": True, "login_at": "2026-03-24 10:00:00"},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.last_login_at is not None
+        assert acc.last_login_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-24 10:00:00"
+
     def test_update_existing_accounts(self, db: AccountDB) -> None:
         """已存在的空闲账号应更新 level/jin_bi"""
         db.import_fresh("u1----p1")
@@ -392,6 +411,19 @@ class TestUpsertFromSync:
         assert acc.level == 20
         assert acc.jin_bi == "9999"
         assert acc.status == AccountStatus.IDLE
+
+    def test_update_existing_account_login_time(self, db: AccountDB) -> None:
+        db.import_fresh("u1----p1")
+        accounts = [
+            {"username": "u1", "level": 20, "jin_bi": "9999",
+             "is_banned": False, "is_active": False, "login_at": "2026-03-24 10:00:00"},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        accounts[0]["login_at"] = "2026-03-24 11:00:00"
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.last_login_at is not None
+        assert acc.last_login_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-24 11:00:00"
 
     def test_sync_does_not_change_status(self, db: AccountDB) -> None:
         """SYNC 不改变已有账号状态"""
@@ -463,6 +495,18 @@ class TestUpsertFromSync:
         acc = db.get_all_accounts()[0]
         assert acc.jin_bi == "50000"
         assert acc.level == 15
+
+    def test_running_account_login_time_still_updates_from_sync(self, db: AccountDB) -> None:
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        accounts = [
+            {"username": "u1", "level": 10, "jin_bi": "3500",
+             "is_banned": False, "is_active": True, "login_at": "2026-03-24 10:00:00"},
+        ]
+        db.upsert_from_sync("VM-01", accounts)
+        acc = db.get_all_accounts()[0]
+        assert acc.last_login_at is not None
+        assert acc.last_login_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-24 10:00:00"
 
     def test_idle_account_jinbi_updates_normally(self, db: AccountDB) -> None:
         """非运行中账号 jin_bi 正常更新"""
@@ -574,6 +618,47 @@ class TestPlatformUpload:
             columns = {row[1] for row in cur.fetchall()}
             assert "uploaded_at" in columns
             # 已有数据未受影响
+            assert db.total_count == 1
+        finally:
+            db.close()
+
+    def test_last_login_at_column_exists(self, db: AccountDB) -> None:
+        cur = db._conn.execute("PRAGMA table_info(accounts)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "last_login_at" in columns
+
+    def test_last_login_at_migration(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "old-login.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE accounts (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                username         TEXT    NOT NULL UNIQUE,
+                password         TEXT    NOT NULL DEFAULT '',
+                bind_email       TEXT    NOT NULL DEFAULT '',
+                bind_email_pwd   TEXT    NOT NULL DEFAULT '',
+                notes            TEXT    NOT NULL DEFAULT '',
+                status           TEXT    NOT NULL DEFAULT '空闲中'
+                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
+                assigned_machine TEXT    NOT NULL DEFAULT '',
+                level            INTEGER NOT NULL DEFAULT 0,
+                jin_bi           TEXT    NOT NULL DEFAULT '0',
+                completed_at     TEXT    DEFAULT NULL,
+                uploaded_at      TEXT    DEFAULT NULL,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+            CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
+        """)
+        conn.execute("INSERT INTO accounts (username, password) VALUES ('u1', 'p1')")
+        conn.commit()
+        conn.close()
+
+        db = AccountDB(db_path)
+        try:
+            cur = db._conn.execute("PRAGMA table_info(accounts)")
+            columns = {row[1] for row in cur.fetchall()}
+            assert "last_login_at" in columns
             assert db.total_count == 1
         finally:
             db.close()

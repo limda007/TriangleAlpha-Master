@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import httpx
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
+from common.models import PLATFORM_ACCOUNT_HEADER, AccountInfo
 from master.app.core.platform_client import PlatformAPIError, PlatformClient
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ class _SyncWorker(QThread):
     def __init__(
         self, client_cfg: PlatformClient, task: str,
         upload_text: str = "", group_name: str = "",
+        upload_usernames: list[str] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -36,6 +38,7 @@ class _SyncWorker(QThread):
         self._task = task  # "upload" / "poll" / "connect" / "refresh"
         self._upload_text = upload_text
         self._group_name = group_name
+        self._upload_usernames = upload_usernames or []
 
     def run(self) -> None:
         try:
@@ -87,16 +90,8 @@ class _SyncWorker(QThread):
             self._client_cfg.access_token,
             self._client_cfg.refresh_token,
         )
-        # 从上传文本中解析 username 列表
-        usernames = []
-        for line in self._upload_text.splitlines():
-            line = line.strip()
-            if line:
-                parts = line.split("----")
-                if parts[0]:
-                    usernames.append(parts[0])
-        self.upload_done.emit(usernames)
-        count = result.get("imported", len(usernames))
+        self.upload_done.emit(self._upload_usernames)
+        count = result.get("imported", len(self._upload_usernames))
         logger.info("平台上传成功：%d 个账号", count)
 
     def _do_poll(self, http: httpx.Client) -> None:
@@ -260,13 +255,14 @@ class PlatformSyncer(QObject):
         pending = self._db.get_completed_not_uploaded()
         if not pending:
             return
-        # 构造上传文本：steam----steam密码----邮箱----邮箱密码----备注
-        lines = [a.to_line() for a in pending]
-        text = "\n".join(lines)
+        text = self._build_upload_text(pending)
+        usernames = [account.username for account in pending]
 
         self._worker = _SyncWorker(
             self._client, "upload",
-            upload_text=text, group_name=self._group_name,
+            upload_text=text,
+            group_name=self._group_name,
+            upload_usernames=usernames,
             parent=self,
         )
         self._worker.upload_done.connect(self._on_upload_done)
@@ -286,6 +282,13 @@ class PlatformSyncer(QObject):
         if self._upload_dirty:
             self._upload_dirty = False
             QTimer.singleShot(1000, self.try_upload_completed)
+
+    @staticmethod
+    def _build_upload_text(accounts: list[AccountInfo]) -> str:
+        """构造销售平台上传文本：表头 + 数据行。"""
+        lines = [PLATFORM_ACCOUNT_HEADER]
+        lines.extend(account.to_platform_line() for account in accounts)
+        return "\n".join(lines)
 
     # ── 连接测试 / Token 刷新 ──
 

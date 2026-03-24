@@ -5,6 +5,9 @@ import enum
 from dataclasses import dataclass, field
 from datetime import datetime
 
+PLATFORM_ACCOUNT_HEADER = "账号----密码----邮箱----邮箱密码----等级----金币----状态----备注----上机时间----完成时间"
+EXPORT_ACCOUNT_HEADER = PLATFORM_ACCOUNT_HEADER
+
 
 class AccountStatus(enum.Enum):
     IDLE = "空闲中"
@@ -59,6 +62,7 @@ class AccountInfo:
     assigned_machine: str = ""
     level: int = 0
     jin_bi: str = "0"
+    last_login_at: datetime | None = None
     completed_at: datetime | None = None
     updated_at: datetime | None = None
     created_at: datetime | None = None
@@ -87,6 +91,18 @@ class AccountInfo:
         parts = [self.username, self.password, self.bind_email, self.bind_email_password]
         if self.notes:
             parts.append(self.notes)
+        return "----".join(parts)
+
+    def to_platform_line(self) -> str:
+        """序列化为平台上传格式。"""
+        status_text = "封禁" if self.status == AccountStatus.BANNED else "正常"
+        notes = self.notes or "无"
+        login_time = self.last_login_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_login_at else "无"
+        completed = self.completed_at.strftime("%Y-%m-%d %H:%M:%S") if self.completed_at else "无"
+        parts = [
+            self.username, self.password, self.bind_email, self.bind_email_password,
+            str(self.level), self.jin_bi, status_text, notes, login_time, completed,
+        ]
         return "----".join(parts)
 
     @property

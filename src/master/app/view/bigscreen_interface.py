@@ -389,7 +389,7 @@ class BigScreenInterface(ScrollArea):
         layout.addLayout(titleRow)
 
         # 账号表格（替代文本框）
-        _POOL_HEADERS = ["账号", "邮箱", "状态", "分配机器", "等级", "金币", "上传时间", "完成时间"]
+        _POOL_HEADERS = ["账号", "邮箱", "状态", "分配机器", "等级", "金币", "登录时间", "完成时间"]
         self.accountTable = TableWidget(panel)
         self.accountTable.setColumnCount(len(_POOL_HEADERS))
         self.accountTable.setHorizontalHeaderLabels(_POOL_HEADERS)
@@ -541,6 +541,8 @@ class BigScreenInterface(ScrollArea):
 
     def _onActionPageChanged(self, index: int) -> None:
         widget = self._actionStack.widget(index)
+        if widget is None:
+            return
         self._actionPivot.setCurrentItem(widget.objectName())
 
     def _buildConfigPage(self) -> QWidget:
@@ -940,13 +942,13 @@ class BigScreenInterface(ScrollArea):
 
         # 结构不变 → 只更新有变化的行
         for name in pending:
-            row = self._row_map.get(name)
-            if row is None:
+            target_row = self._row_map.get(name)
+            if target_row is None:
                 continue
-            node = self._nm.nodes.get(name)
-            if node is None:
+            target_node = self._nm.nodes.get(name)
+            if target_node is None:
                 continue
-            self._setRowData(row, node)
+            self._setRowData(target_row, target_node)
 
     def _setRowData(self, row: int, node) -> None:
         # 查询节点绑定的卡密
@@ -1055,7 +1057,7 @@ class BigScreenInterface(ScrollArea):
                 acc.assigned_machine,
                 str(acc.level) if acc.level else "",
                 acc.jin_bi if acc.jin_bi != "0" else "",
-                acc.created_at.strftime("%m-%d %H:%M") if acc.created_at else "",
+                acc.last_login_at.strftime("%Y-%m-%d %H:%M") if acc.last_login_at else "",
                 acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
             ]
             for col, text in enumerate(vals):
