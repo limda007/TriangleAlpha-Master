@@ -5,6 +5,7 @@ import asyncio
 import base64
 import contextlib
 import socket
+from unittest.mock import MagicMock, patch
 
 from common.protocol import (
     TcpCommand,
@@ -100,6 +101,45 @@ class TestTcpUpdateTxtE2E:
             server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await server_task
+
+        asyncio.run(run())
+
+    def test_update_self_roundtrip(self, tmp_path):
+        port = _free_port()
+        new_binary = b"new-slave-binary"
+        payload = base64.b64encode(new_binary).decode("ascii")
+
+        async def run():
+            from slave.command_handler import CommandHandler
+
+            shutdown_cb = MagicMock()
+            with patch("slave.command_handler.launch_self_update_helper"):
+                handler = CommandHandler(str(tmp_path), port=port, on_shutdown_requested=shutdown_cb)
+                handler.SELF_UPDATE_GRACE_SEC = 0
+                server_task = asyncio.create_task(handler.run())
+                await asyncio.sleep(0.3)
+
+                _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                cmd = build_tcp_command(
+                    TcpCommand.UPDATE_SELF,
+                    payload=f"TriangleAlpha-Slave.exe|{payload}",
+                )
+                with patch("slave.command_handler.os.name", "nt"):
+                    writer.write((cmd + "\n").encode("utf-8"))
+                    await writer.drain()
+                    writer.close()
+                    await writer.wait_closed()
+                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0)
+
+                pending = tmp_path / "TriangleAlpha-Slave.exe.pending"
+                assert pending.exists()
+                assert pending.read_bytes() == new_binary
+                shutdown_cb.assert_called_once()
+
+                server_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await server_task
 
         asyncio.run(run())
 
@@ -293,6 +333,10 @@ class TestProtocolCompatibility:
         # DELETE_FILE
         cmd = build_tcp_command(TcpCommand.DELETE_FILE, "a.txt|b.txt")
         assert cmd == "DELETEFILE|a.txt|b.txt"
+
+        # UPDATE_SELF（payload 原样透传）
+        cmd = build_tcp_command(TcpCommand.UPDATE_SELF, "TriangleAlpha-Slave.exe|QUJD")
+        assert cmd == "UPDATESELF|TriangleAlpha-Slave.exe|QUJD"
 
         # START_EXE (无 payload)
         cmd = build_tcp_command(TcpCommand.START_EXE)

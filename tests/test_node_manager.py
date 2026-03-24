@@ -33,7 +33,7 @@ class TestNodeManager:
         msg_st = UdpMessage(
             type=UdpMessageType.STATUS,
             machine_name="VM-01",
-            state="升级中",
+            state="运行中",
             level=18,
             jin_bi="12450",
             desc="正在升级",
@@ -49,7 +49,7 @@ class TestNodeManager:
         msg_st = UdpMessage(
             type=UdpMessageType.STATUS,
             machine_name="VM-01",
-            state="升级中",
+            state="运行中",
             level=18,
             jin_bi="12450",
             desc="正在升级",
@@ -81,3 +81,17 @@ class TestNodeManager:
         self.nm.handle_udp_message(msg2, "10.1.3.52")
         assert len(self.nm.get_nodes_by_group("A组")) == 1
         assert len(self.nm.get_nodes_by_group("默认")) == 1
+
+    def test_ext_online_updates_kami_code(self):
+        msg = UdpMessage(
+            type=UdpMessageType.EXT_ONLINE,
+            machine_name="VM-01",
+            user_name="A",
+            group="A组",
+            token_key="TOKEN123",
+            kami_code="KAMI456",
+        )
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        node = self.nm.nodes["VM-01"]
+        assert node.token_key == "TOKEN123"
+        assert node.kami_code == "KAMI456"

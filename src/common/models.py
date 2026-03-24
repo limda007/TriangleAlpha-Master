@@ -36,6 +36,7 @@ class NodeInfo:
     level_threshold: str = ""
     loot_count: str = ""
     token_key: str = ""    # slave 端 token.txt 内容
+    kami_code: str = ""    # slave 端 kamis.txt 当前值
     status_text: str = ""  # IPC 原始状态文本（如 "等待匹配"/"正在对局"）
     last_seen: datetime = field(default_factory=datetime.now)
     last_status_update: datetime = field(default_factory=datetime.now)

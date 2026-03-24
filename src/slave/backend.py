@@ -36,6 +36,7 @@ class SlaveBackend(QThread):
     group_changed = pyqtSignal(str)
     log_entry = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    shutdown_requested = pyqtSignal()
 
     def __init__(self, base_dir: Path, master_ip: str | None, parent: object = None) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
@@ -90,6 +91,7 @@ class SlaveBackend(QThread):
             on_command=self._on_command,
             on_account_updated=self._on_account_updated,
             on_group_changed=self._on_group_changed,
+            on_shutdown_requested=self._on_shutdown_requested,
         )
         log_reporter = LogReporter(self._master_ip, self._heartbeat.machine_name)
 
@@ -140,6 +142,10 @@ class SlaveBackend(QThread):
             logger.exception("分组持久化失败: %s", group)
         self.group_changed.emit(group)
         logger.info("分组已持久化: %s", group)
+
+    def _on_shutdown_requested(self) -> None:
+        logger.info("收到退出请求，准备重启 slave 完成自更新")
+        self.shutdown_requested.emit()
 
     def _emit_account_count(self) -> None:
         acc_file = self._base_dir / "accounts.txt"

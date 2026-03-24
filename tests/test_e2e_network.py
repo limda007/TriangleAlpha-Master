@@ -140,6 +140,44 @@ class TestTcpCommunication:
         assert len(received_key) == 1
         assert received_key[0] == key
 
+    def test_tcp_update_self_roundtrip(self):
+        """完整往返: 自更新 payload 应原样透传。"""
+        port = 19994
+        payload = "TriangleAlpha-Slave.exe|QUJD"
+        received_payload = []
+
+        def server():
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.settimeout(5.0)
+            srv.bind(("127.0.0.1", port))
+            srv.listen(1)
+            try:
+                conn, _ = srv.accept()
+                data = conn.recv(4096).decode("utf-8").strip()
+                if data.startswith("UPDATESELF|"):
+                    received_payload.append(data[len("UPDATESELF|"):])
+                conn.close()
+            except TimeoutError:
+                pass
+            finally:
+                srv.close()
+
+        t = threading.Thread(target=server)
+        t.start()
+        time.sleep(0.1)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect(("127.0.0.1", port))
+        cmd = build_tcp_command(TcpCommand.UPDATE_SELF, payload=payload)
+        sock.sendall((cmd + "\n").encode("utf-8"))
+        sock.close()
+
+        t.join(timeout=5)
+
+        assert received_payload == [payload]
+
 
 class TestSlaveCommandHandler:
     """Slave CommandHandler 端到端测试"""

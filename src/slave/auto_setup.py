@@ -20,67 +20,120 @@ _TASK_NAME = "TriangleAlphaSlave"
 
 
 def setup_startup() -> None:
-    """注册计划任务实现开机自启（管理员权限 + 崩溃自动重启）。"""
+    """注册多重自启：计划任务 + 启动项快捷方式 + 注册表兜底。"""
     if os.name != "nt":
         return
     try:
-        exe_path = sys.executable if not getattr(sys, "frozen", False) else sys.argv[0]
-        exe_path = str(Path(exe_path).resolve())
+        exe_path = _resolve_executable_path()
+        start_command = _build_start_command(exe_path)
 
-        # 清除旧版注册表自启（迁移）
+        # 清除同名旧注册表自启（重新写入）
         _remove_legacy_registry_startup()
 
-        # 创建计划任务：开机启动 + 管理员权限
-        result = subprocess.run(  # noqa: S603
-            [
-                "schtasks", "/Create",
-                "/TN", _TASK_NAME,
-                "/TR", f'"{exe_path}"',
-                "/SC", "ONSTART",      # 开机触发，无需用户登录
-                "/RL", "HIGHEST",      # 管理员权限
-                "/F",                  # 强制覆盖
-            ],
-            shell=False,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            logger.warning("计划任务创建失败: %s", result.stderr.strip())
+        task_ok = _create_startup_task(start_command)
+        shortcut_ok = _create_startup_shortcut(exe_path)
+        registry_ok = _set_registry_startup(start_command)
+
+        if not any((task_ok, shortcut_ok, registry_ok)):
+            logger.error("所有自启动注册方式均失败: %s", exe_path)
             return
 
-        # 配置崩溃自动重启（失败后 30s 重启，最多 3 次）
-        subprocess.run(  # noqa: S603
-            [
-                "schtasks", "/Change",
-                "/TN", _TASK_NAME,
-                "/RT", "30",           # 重启延迟 30 秒
-                "/RI", "1",            # 每 1 分钟重试
-                "/K",                  # 失败时终止后重启
-            ],
-            shell=False,
-            check=False,
-            capture_output=True,
+        logger.info(
+            "自启动注册完成: exe=%s task=%s shortcut=%s registry=%s",
+            exe_path,
+            task_ok,
+            shortcut_ok,
+            registry_ok,
         )
-
-        logger.info("计划任务已注册（管理员权限 + 崩溃重启）: %s", exe_path)
-
-        # 同时在启动文件夹创建快捷方式（双保险）
-        _create_startup_shortcut(exe_path)
     except Exception:
         logger.exception("自启动注册失败")
 
 
-def _create_startup_shortcut(exe_path: str) -> None:
+def _resolve_executable_path() -> Path:
+    raw = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    return Path(raw).resolve()
+
+
+def _build_start_command(exe_path: Path) -> str:
+    return f'cmd.exe /c start "" /d "{exe_path.parent}" "{exe_path}"'
+
+
+def _default_startup_dir() -> Path:
+    return (
+        Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+    )
+
+
+def _run_cscript(script_text: str) -> subprocess.CompletedProcess[str]:
+    script_path = Path(os.environ.get("TEMP", tempfile.gettempdir())) / "_ta_startup_helper.vbs"
+    script_path.write_text(script_text, encoding="utf-8")
+    try:
+        return subprocess.run(  # noqa: S603
+            ["cscript", "//Nologo", str(script_path)],
+            shell=False,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+
+
+def _resolve_startup_dir() -> Path:
+    """优先通过 WScript.SpecialFolders 获取系统真实启动目录。"""
+    fallback = _default_startup_dir()
+    try:
+        result = _run_cscript('WScript.Echo CreateObject("WScript.Shell").SpecialFolders("Startup")\n')
+    except Exception:
+        logger.exception("查询真实启动目录失败，回退默认路径")
+        return fallback
+    startup_dir = result.stdout.strip()
+    if result.returncode == 0 and startup_dir:
+        return Path(startup_dir)
+    stderr = result.stderr.strip() or result.stdout.strip()
+    if stderr:
+        logger.warning("读取启动目录失败，回退默认路径: %s", stderr)
+    return fallback
+
+
+def _create_startup_task(start_command: str) -> bool:
+    """创建计划任务，显式指定工作目录，兼容嵌套路径。"""
+    result = subprocess.run(  # noqa: S603
+        [
+            "schtasks", "/Create",
+            "/TN", _TASK_NAME,
+            "/TR", start_command,
+            "/SC", "ONSTART",
+            "/RL", "HIGHEST",
+            "/F",
+        ],
+        shell=False,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning("计划任务创建失败: %s", result.stderr.strip() or result.stdout.strip())
+        return False
+    logger.info("计划任务已注册: %s", start_command)
+    return True
+
+
+def _create_startup_shortcut(exe_path: Path) -> bool:
     """在当前用户启动文件夹创建快捷方式（每次运行覆盖写入）。"""
     try:
-        startup_dir = Path(os.environ.get(
-            "APPDATA", Path.home() / "AppData" / "Roaming"
-        )) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        startup_dir = _resolve_startup_dir()
+        startup_dir.mkdir(parents=True, exist_ok=True)
         shortcut_path = startup_dir / f"{_TASK_NAME}.lnk"
 
         # 使用 VBScript 创建快捷方式，避免依赖 pywin32
-        vbs = (
+        result = _run_cscript(
             f'Set ws = CreateObject("WScript.Shell")\n'
             f'Set sc = ws.CreateShortcut("{shortcut_path}")\n'
             f'sc.TargetPath = "{exe_path}"\n'
@@ -88,24 +141,46 @@ def _create_startup_shortcut(exe_path: str) -> None:
             f'sc.WindowStyle = 7\n'
             f'sc.Save\n'
         )
-        vbs_path = Path(os.environ.get("TEMP", tempfile.gettempdir())) / "_ta_shortcut.vbs"
-        vbs_path.write_text(vbs, encoding="utf-8")
-        subprocess.run(  # noqa: S603
-            ["cscript", "//Nologo", str(vbs_path)],
-            shell=False, check=False, capture_output=True, timeout=10,
-        )
-        vbs_path.unlink(missing_ok=True)
+        if result.returncode != 0:
+            logger.warning("启动文件夹快捷方式创建失败: %s", result.stderr.strip() or result.stdout.strip())
+            return False
         logger.info("启动文件夹快捷方式已创建: %s", shortcut_path)
+        return True
     except Exception:
         logger.exception("创建启动文件夹快捷方式失败")
+        return False
+
+
+def _set_registry_startup(start_command: str) -> bool:
+    """写入 HKCU Run，兼容部分机器自定义启动目录。"""
+    try:
+        import winreg  # type: ignore[import-not-found]
+
+        key = winreg.CreateKey(  # type: ignore[attr-defined]
+            winreg.HKEY_CURRENT_USER,  # type: ignore[attr-defined]
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+        )
+        try:
+            winreg.SetValueEx(  # type: ignore[attr-defined]
+                key,
+                _TASK_NAME,
+                0,
+                winreg.REG_SZ,  # type: ignore[attr-defined]
+                start_command,
+            )
+        finally:
+            winreg.CloseKey(key)  # type: ignore[attr-defined]
+        logger.info("注册表自启动已写入: %s", start_command)
+        return True
+    except Exception:
+        logger.exception("写入注册表自启动失败")
+        return False
 
 
 def _remove_startup_shortcut() -> None:
     """删除启动文件夹中的快捷方式。"""
     try:
-        startup_dir = Path(os.environ.get(
-            "APPDATA", Path.home() / "AppData" / "Roaming"
-        )) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        startup_dir = _resolve_startup_dir()
         shortcut_path = startup_dir / f"{_TASK_NAME}.lnk"
         if shortcut_path.exists():
             shortcut_path.unlink()

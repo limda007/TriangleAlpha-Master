@@ -27,7 +27,7 @@ class TestC1ThemeMode:
         from qfluentwidgets import Theme
 
         from master.app.common.config import cfg
-        assert cfg.get(cfg.themeMode) == Theme.AUTO
+        assert cfg.themeMode.defaultValue == Theme.AUTO
 
     def test_theme_changed_signal_exists(self):
         from master.app.common.config import cfg
@@ -92,6 +92,24 @@ class TestC3TcpSocketClose:
             task.run()
 
         mock_sock.close.assert_called_once()
+        commander.command_sent.emit.assert_called_once()
+
+    def test_self_update_broken_pipe_is_treated_as_expected(self):
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
+
+        commander = MagicMock(spec=TcpCommander)
+        commander.command_failed = MagicMock()
+        commander.command_sent = MagicMock()
+        task = _TcpSendTask("1.2.3.4", "UPDATESELF|payload", commander)
+
+        mock_sock = MagicMock()
+        mock_sock.sendall.side_effect = BrokenPipeError(32, "Broken pipe")
+
+        with patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock):
+            task.run()
+
+        mock_sock.close.assert_called_once()
+        commander.command_failed.emit.assert_not_called()
         commander.command_sent.emit.assert_called_once()
 
 

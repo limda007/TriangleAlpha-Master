@@ -1,6 +1,7 @@
 """TCP 指令发送器：通过线程池并发发送 TCP 命令到被控端"""
 from __future__ import annotations
 
+import errno
 import os
 import socket
 
@@ -27,9 +28,20 @@ class _TcpSendTask(QRunnable):
             sock.sendall((self._command_str + "\n").encode("utf-8"))
             self._commander.command_sent.emit(self._ip, self._command_str)
         except Exception as e:  # noqa: BLE001
-            self._commander.command_failed.emit(self._ip, str(e))
+            if self._is_expected_self_update_disconnect(e):
+                self._commander.command_sent.emit(self._ip, self._command_str)
+            else:
+                self._commander.command_failed.emit(self._ip, str(e))
         finally:
             sock.close()
+
+    def _is_expected_self_update_disconnect(self, err: Exception) -> bool:
+        if not self._command_str.startswith(f"{TcpCommand.UPDATE_SELF.value}|"):
+            return False
+        if isinstance(err, (BrokenPipeError, ConnectionResetError)):
+            return True
+        err_no = getattr(err, "errno", None)
+        return err_no in {errno.EPIPE, errno.ECONNRESET, 54, 10054}
 
 
 class TcpCommander(QObject):

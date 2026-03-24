@@ -13,7 +13,8 @@ LOCAL_IPC_PORT = 8889       # TestDemo → slave 本地 IPC 端口
 IPC_TIMEOUT = 15            # IPC 数据过期阈值（秒）
 OFFLINE_TIMEOUT = 15
 DISCONNECT_TIMEOUT = 60
-TCP_SEND_TIMEOUT = 10
+TCP_SEND_TIMEOUT = 60
+SLAVE_SELF_UPDATE_FILENAME = "TriangleAlpha-Slave.exe"
 
 
 class UdpMessageType(enum.Enum):
@@ -76,6 +77,7 @@ class UdpMessage:
     loot_count: str = ""
     sync_payload: str = ""  # ACCOUNT_SYNC: base64 编码的 JSON 账号数组
     token_key: str = ""     # EXT_ONLINE: slave 端 token.txt 内容
+    kami_code: str = ""     # EXT_ONLINE: slave 端 kamis.txt 当前值
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -112,6 +114,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 level_threshold=parts[9] if len(parts) >= 10 else "",
                 loot_count=parts[10] if len(parts) >= 11 else "",
                 token_key=parts[11] if len(parts) >= 12 else "",
+                kami_code=parts[12] if len(parts) >= 13 else "",
             )
         case "ACCOUNT_SYNC" if len(parts) >= 3:
             return UdpMessage(
@@ -140,11 +143,11 @@ def build_udp_ext_online(
     machine_name: str, user_name: str, cpu: float, mem: float,
     version: str, group: str, teammate_fill: str = "",
     weapon_config: str = "", level_threshold: str = "",
-    loot_count: str = "", token_key: str = "",
+    loot_count: str = "", token_key: str = "", kami_code: str = "",
 ) -> str:
     return (
         f"EXT_ONLINE|{machine_name}|{user_name}|{cpu:.1f}|{mem:.1f}"
-        f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}|{token_key}"
+        f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}|{token_key}|{kami_code}"
     )
 
 
@@ -169,6 +172,7 @@ def build_udp_need_kami(machine_name: str) -> str:
 
 class TcpCommand(enum.Enum):
     UPDATE_TXT = "UPDATETXT"
+    UPDATE_SELF = "UPDATESELF"
     START_EXE = "STARTEXE"
     STOP_EXE = "STOPEXE"
     REBOOT_PC = "REBOOTPC"
@@ -190,6 +194,7 @@ def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
         return f"{cmd.value}|{encoded}"
     elif cmd in (
+        TcpCommand.UPDATE_SELF,
         TcpCommand.EXT_SET_GROUP, TcpCommand.DELETE_FILE,
         TcpCommand.EXT_SET_CONFIG,
     ) and payload:

@@ -42,6 +42,12 @@ class TestParseUdp:
         assert msg.cpu_percent == 45.2
         assert msg.group == "A组"
 
+    def test_parse_ext_online_with_token_and_kami(self):
+        msg = parse_udp_message("EXT_ONLINE|VM-01|Admin|45.2|60.1|1.0.0|A组|||||TOKEN123|KAMI456")
+        assert msg is not None
+        assert msg.token_key == "TOKEN123"
+        assert msg.kami_code == "KAMI456"
+
     def test_parse_unknown_returns_none(self):
         assert parse_udp_message("GARBAGE|data") is None
 
@@ -51,7 +57,8 @@ class TestBuildUdp:
         assert build_udp_online("VM-01", "Admin") == "ONLINE|VM-01|Admin"
 
     def test_build_status(self):
-        assert build_udp_status("VM-01", "升级中", 18, "12450", "正在升级") == "STATUS|VM-01|升级中|18|12450|正在升级|0|"
+        result_default = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级")
+        assert result_default == "STATUS|VM-01|升级中|18|12450|正在升级|0|"
         result = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120")
         assert result == "STATUS|VM-01|升级中|18|12450|正在升级|120|"
         result_st = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120", "等待匹配")

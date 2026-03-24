@@ -123,6 +123,7 @@ def main() -> None:
     backend.group_changed.connect(window.on_group_changed)
     backend.log_entry.connect(window.append_log)
     backend.error_occurred.connect(window.append_log)
+    backend.shutdown_requested.connect(app.quit)
 
     backend.start()
     # 启动时直接最小化到托盘，不弹出窗口

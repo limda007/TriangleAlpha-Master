@@ -51,7 +51,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
-from common.protocol import TcpCommand
+from common.protocol import SLAVE_SELF_UPDATE_FILENAME, TcpCommand
 from master.app.common.config import cfg
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
@@ -951,9 +951,11 @@ class BigScreenInterface(ScrollArea):
             self._setRowData(target_row, target_node)
 
     def _setRowData(self, row: int, node) -> None:
-        # 查询节点绑定的卡密
+        # 优先显示 slave 实际上报的本地卡密，其次回退到 master 本地绑定关系
         kami_display = "--"
-        if self._kami_db:
+        if node.kami_code:
+            kami_display = node.kami_code[:8]
+        elif self._kami_db:
             kami = self._kami_db.get_kami_for_node(node.machine_name)
             if kami:
                 kami_display = kami.kami_code[:8]
@@ -1725,11 +1727,17 @@ class BigScreenInterface(ScrollArea):
         ):
             return
         for filename, content_b64 in files_data:
-            self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
+            if filename.lower() == SLAVE_SELF_UPDATE_FILENAME.lower():
+                self._tcp.broadcast(ips, TcpCommand.UPDATE_SELF, f"{filename}|{content_b64}")
+            else:
+                self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
         file_names = ", ".join(Path(p).name for p in paths)
         self._nm.add_history("一键分发文件", scope, file_names)
+        detail = "（含 Slave 自更新）" if any(
+            name.lower() == SLAVE_SELF_UPDATE_FILENAME.lower() for name, _content in files_data
+        ) else ""
         InfoBar.success(
-            "已分发", f"{len(files_data)} 个文件已发送到 {scope}",
+            "已分发", f"{len(files_data)} 个文件已发送到 {scope}{detail}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
 

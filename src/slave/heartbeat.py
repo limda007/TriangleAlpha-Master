@@ -138,6 +138,7 @@ class HeartbeatService:
                         level_threshold = self._read_config("下号等级.txt")
                         loot_count = self._read_config("舔包次数.txt")
                         token_key = self._read_config("token.txt")
+                        kami_code = self._read_kami_code()
                         msg = build_udp_ext_online(
                             self._machine_name,
                             self._user_name,
@@ -150,6 +151,7 @@ class HeartbeatService:
                             level_threshold,
                             loot_count,
                             token_key,
+                            kami_code,
                         )
                         data = msg.encode("utf-8")
                         target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
@@ -192,6 +194,22 @@ class HeartbeatService:
     def _read_teammate_fill(self) -> str:
         """读取补齐队友配置，缺省时按关闭处理。"""
         return self._read_config("补齐队友配置.txt")
+
+    def _read_kami_code(self) -> str:
+        """读取本地卡密文件的首个非空值，用于心跳上报。"""
+        if not self._base_dir:
+            return ""
+        kami_file = self._base_dir / "kamis.txt"
+        try:
+            if not kami_file.exists():
+                return ""
+            for line in kami_file.read_text(encoding="utf-8-sig").splitlines():
+                value = line.strip()
+                if value:
+                    return value
+        except OSError:
+            return ""
+        return ""
 
     def _read_config(self, filename: str) -> str:
         """读取指定配置文件内容，不存在或为空时自动创建默认值。"""

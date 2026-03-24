@@ -74,13 +74,14 @@ class TestProtocolRoundTrip:
         assert msg.user_name == "Admin"
 
     def test_ext_online_roundtrip(self):
-        raw = build_udp_ext_online("VM-01", "Admin", 55.5, 70.2, "2.0.0", "B组")
+        raw = build_udp_ext_online("VM-01", "Admin", 55.5, 70.2, "2.0.0", "B组", kami_code="KAMI456")
         msg = parse_udp_message(raw)
         assert msg.type == UdpMessageType.EXT_ONLINE
         assert msg.cpu_percent == 55.5
         assert msg.mem_percent == 70.2
         assert msg.slave_version == "2.0.0"
         assert msg.group == "B组"
+        assert msg.kami_code == "KAMI456"
 
     def test_status_roundtrip(self):
         raw = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级")

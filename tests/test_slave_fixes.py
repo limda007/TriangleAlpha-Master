@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -164,8 +165,10 @@ class TestH7SlaveExtQuery:
         assert not hasattr(TcpCommand, "EXT_QUERY")
 
     def test_remaining_commands(self):
-        expected = {"UPDATE_TXT", "START_EXE", "STOP_EXE", "REBOOT_PC",
-                    "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP", "EXT_SET_CONFIG"}
+        expected = {
+            "UPDATE_TXT", "UPDATE_SELF", "START_EXE", "STOP_EXE", "REBOOT_PC",
+            "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP", "EXT_SET_CONFIG", "PUSH_KAMI",
+        }
         assert {m.name for m in TcpCommand} == expected
 
 
@@ -224,6 +227,29 @@ class TestH10CommandInjection:
         assert "shell=False" in source
 
 
+class TestH12StartupSetup:
+    """验证启动目录和启动命令不再依赖写死路径。"""
+
+    def test_resolve_startup_dir_prefers_special_folder(self, tmp_path):
+        from slave.auto_setup import _resolve_startup_dir
+
+        result = MagicMock(returncode=0, stdout=f"{tmp_path}\n", stderr="")
+        with patch("slave.auto_setup._run_cscript", return_value=result):
+            startup_dir = _resolve_startup_dir()
+
+        assert startup_dir == tmp_path
+
+    def test_build_start_command_sets_workdir(self, tmp_path):
+        from slave.auto_setup import _build_start_command
+
+        exe_path = tmp_path / "nested" / "TriangleAlpha-Slave.exe"
+        command = _build_start_command(exe_path)
+
+        assert 'start "" /d "' in command
+        assert str(exe_path.parent) in command
+        assert str(exe_path) in command
+
+
 # ── M4: 文件大小限制 ──
 
 
@@ -232,7 +258,56 @@ class TestM4FileSizeLimit:
 
     def test_stream_limit(self):
         from slave.command_handler import CommandHandler
-        assert CommandHandler.STREAM_LIMIT == 1024 * 1024
+        assert CommandHandler.STREAM_LIMIT == 64 * 1024 * 1024
+
+
+class TestM5SelfUpdate:
+    """验证 slave 自更新的暂存与 helper 生成。"""
+
+    def test_prepare_self_update_writes_pending_and_helper(self, tmp_path):
+        from slave.self_update import prepare_self_update
+
+        exe_path = tmp_path / "nested" / "TriangleAlpha-Slave.exe"
+        exe_path.parent.mkdir(parents=True)
+        exe_path.write_bytes(b"old")
+        encoded = base64.b64encode(b"new-binary").decode("ascii")
+
+        update = prepare_self_update(
+            tmp_path,
+            f"TriangleAlpha-Slave.exe|{encoded}",
+            current_pid=4321,
+            current_executable=exe_path,
+        )
+
+        assert update.pending_path.read_bytes() == b"new-binary"
+        helper_text = update.helper_path.read_text(encoding="utf-8")
+        assert str(exe_path) in helper_text
+        assert str(update.pending_path) in helper_text
+        assert "4321" in helper_text
+
+    def test_handle_update_self_requests_shutdown(self, tmp_path):
+        from common.protocol import ParsedTcpCommand
+        from slave.command_handler import CommandHandler
+
+        shutdown_cb = MagicMock()
+        handler = CommandHandler(str(tmp_path), on_shutdown_requested=shutdown_cb)
+        parsed = ParsedTcpCommand(TcpCommand.UPDATE_SELF, "TriangleAlpha-Slave.exe|QUJD")
+        prepared = MagicMock(filename="TriangleAlpha-Slave.exe")
+
+        async def run():
+            with (
+                patch("slave.command_handler.os.name", "nt"),
+                patch("slave.command_handler.prepare_self_update", return_value=prepared),
+                patch("slave.command_handler.launch_self_update_helper"),
+            ):
+                handler.SELF_UPDATE_GRACE_SEC = 0
+                desc = await handler._handle_update_self(parsed)
+                await asyncio.sleep(0)
+
+            assert desc == "Slave 自更新已接收: TriangleAlpha-Slave.exe"
+
+        asyncio.run(run())
+        shutdown_cb.assert_called_once()
 
 
 # ── H11: Slave 单实例保护 ──

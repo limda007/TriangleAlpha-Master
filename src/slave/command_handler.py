@@ -5,19 +5,23 @@ import asyncio
 import base64
 import binascii
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 from common.protocol import TCP_CMD_PORT, ParsedTcpCommand, TcpCommand, parse_tcp_command
 from slave.logging_utils import get_logger
 from slave.process_manager import ProcessManager
+from slave.self_update import launch_self_update_helper, prepare_self_update
 
 logger = get_logger(__name__)
 
 
 class CommandHandler:
-    # H1: readline 缓冲区限制（1MB，支持大量账号的 base64 payload）
-    STREAM_LIMIT = 1024 * 1024
+    # 允许通过单条 TCP 指令下发较大的 exe 更新包（base64 后约增加 33%）
+    STREAM_LIMIT = 64 * 1024 * 1024
+    READ_TIMEOUT = 120
+    SELF_UPDATE_GRACE_SEC = 2.0
 
     # 允许远程写入的配置文件白名单
     _CONFIG_WHITELIST = {"补齐队友配置.txt", "武器配置.txt", "下号等级.txt", "舔包次数.txt", "token.txt"}
@@ -29,6 +33,7 @@ class CommandHandler:
         on_command: Callable[[str], None] | None = None,
         on_account_updated: Callable[[int], None] | None = None,
         on_group_changed: Callable[[str], None] | None = None,
+        on_shutdown_requested: Callable[[], None] | None = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._port = port
@@ -38,6 +43,7 @@ class CommandHandler:
         self._on_command = on_command
         self._on_account_updated = on_account_updated
         self._on_group_changed = on_group_changed
+        self._on_shutdown_requested = on_shutdown_requested
 
     def set_group_callback(self, cb: Callable[[str], None]) -> None:
         self._group_callback = cb
@@ -90,7 +96,7 @@ class CommandHandler:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername", ("unknown", 0))
         try:
-            line = await asyncio.wait_for(reader.readline(), timeout=30)
+            line = await asyncio.wait_for(reader.readline(), timeout=self.READ_TIMEOUT)
             if not line:
                 return
             text = line.decode("utf-8", errors="replace").strip()
@@ -114,6 +120,8 @@ class CommandHandler:
         match parsed.command:
             case TcpCommand.UPDATE_TXT:
                 desc = await self._handle_update_txt(parsed)
+            case TcpCommand.UPDATE_SELF:
+                desc = await self._handle_update_self(parsed)
             case TcpCommand.UPDATE_KEY:
                 desc = self._handle_update_key(parsed)
             case TcpCommand.START_EXE:
@@ -237,4 +245,34 @@ class CommandHandler:
         (self._base_dir / "kamis.txt").write_text(content, encoding="utf-8")
         desc = f"卡密已更新: {content[:20]}..."
         logger.info("接收: %s", desc)
+        return desc
+
+    async def _handle_update_self(self, parsed: ParsedTcpCommand) -> str:
+        """处理 slave 自更新：先暂存，再由 helper 在退出后替换并拉起。"""
+        try:
+            current_exe = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
+            update = prepare_self_update(
+                self._base_dir,
+                parsed.payload,
+                current_pid=os.getpid(),
+                current_executable=current_exe,
+            )
+        except ValueError as err:
+            logger.error("自更新请求无效: %s", err)
+            return ""
+        except OSError:
+            logger.exception("写入自更新暂存文件失败")
+            return ""
+
+        try:
+            launch_self_update_helper(update)
+        except OSError:
+            logger.exception("启动自更新 helper 失败")
+            return ""
+
+        desc = f"Slave 自更新已接收: {update.filename}"
+        logger.info("接收: %s", desc)
+        if self._on_shutdown_requested is not None and os.name == "nt":
+            await asyncio.sleep(self.SELF_UPDATE_GRACE_SEC)
+            self._on_shutdown_requested()
         return desc

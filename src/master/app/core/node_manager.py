@@ -168,6 +168,7 @@ class NodeManager(QObject):
                 level_threshold=msg.level_threshold,
                 loot_count=msg.loot_count,
                 token_key=msg.token_key,
+                kami_code=msg.kami_code,
             )
         else:
             node = self.nodes[name]
@@ -183,6 +184,7 @@ class NodeManager(QObject):
             node.level_threshold = msg.level_threshold
             node.loot_count = msg.loot_count
             node.token_key = msg.token_key
+            node.kami_code = msg.kami_code
             node.last_seen = datetime.now()
         if is_new:
             self.node_online.emit(name)
