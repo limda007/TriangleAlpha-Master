@@ -11,7 +11,7 @@
 
 ## Q2: 节点显示「在线」但脚本不启动？
 
-1. 确认被控端目录下存在 `SlaveClientConsole.exe` 文件（TestDemo 启动检查）
+1. 确认先运行过一次 `TriangleAlpha-Slave.exe`，程序会自动修复/生成 `SlaveClientConsole.exe`
 2. 检查 TestDemo 脚本是否正常
 3. 尝试右键该节点 → 启动/重启脚本
 

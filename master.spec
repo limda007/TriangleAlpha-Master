@@ -72,6 +72,7 @@ a = Analysis(
     binaries=[] + httpx_binaries + httpcore_binaries,
     datas=[
         ('src/master/app/resource', 'master/app/resource'),
+        ('pyproject.toml', '.'),
     ] + httpx_datas + httpcore_datas,
     hiddenimports=[
         'PyQt6.sip',

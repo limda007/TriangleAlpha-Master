@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import psutil
@@ -17,6 +19,9 @@ from slave.runtime_paths import RESOURCE_DIR, get_base_dir
 from slave.slave_window import SlaveWindow
 
 logger = get_logger(__name__)
+SLAVE_CLIENT_CONSOLE_FILENAME = "SlaveClientConsole.exe"
+_CONSOLE_PLACEHOLDER_POLL_SEC = 2.0
+_CONSOLE_PLACEHOLDER_MAX_WAIT_SEC = 12 * 60 * 60
 
 
 def _get_base_dir() -> Path:
@@ -86,6 +91,59 @@ def _read_master_ip(base_dir: Path) -> str | None:
     return None
 
 
+def _current_executable_path() -> Path | None:
+    raw = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _is_console_placeholder_mode(executable_path: Path | None = None) -> bool:
+    path = executable_path or _current_executable_path()
+    return path is not None and path.name.lower() == SLAVE_CLIENT_CONSOLE_FILENAME.lower()
+
+
+def _ensure_console_placeholder(current_executable: Path | None = None) -> Path | None:
+    """将当前 slave 可执行文件复制为 TestDemo 需要的占位程序。"""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return None
+    source_path = current_executable if current_executable is not None else _current_executable_path()
+    if source_path is None or _is_console_placeholder_mode(source_path):
+        return None
+
+    placeholder_path = source_path.parent / SLAVE_CLIENT_CONSOLE_FILENAME
+    temp_path = placeholder_path.with_suffix(f"{placeholder_path.suffix}.tmp")
+    try:
+        shutil.copy2(source_path, temp_path)
+        temp_path.replace(placeholder_path)
+    except OSError:
+        temp_path.unlink(missing_ok=True)
+        logger.exception("修复占位程序失败: %s", placeholder_path)
+        return None
+
+    logger.info("占位程序已就绪: %s", placeholder_path)
+    return placeholder_path
+
+
+def _run_console_placeholder(
+    *,
+    parent_pid: int | None = None,
+    poll_interval_sec: float = _CONSOLE_PLACEHOLDER_POLL_SEC,
+    max_wait_sec: float = _CONSOLE_PLACEHOLDER_MAX_WAIT_SEC,
+) -> int:
+    """作为 TestDemo 占位程序运行，避免拉起第二个完整 slave GUI。"""
+    wait_pid = parent_pid if parent_pid is not None else os.getppid()
+    if wait_pid <= 0 or wait_pid == os.getpid():
+        return 0
+
+    deadline = time.monotonic() + max_wait_sec if max_wait_sec > 0 else None
+    while psutil.pid_exists(wait_pid):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        time.sleep(max(0.1, poll_interval_sec))
+    return 0
+
+
 def main() -> None:
     # --uninstall: 自清理后退出
     if "--uninstall" in sys.argv:
@@ -94,7 +152,11 @@ def main() -> None:
         print("卸载清理完成")
         sys.exit(0)
 
+    if _is_console_placeholder_mode():
+        sys.exit(_run_console_placeholder())
+
     configure_slave_logging()
+    _ensure_console_placeholder()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 托盘模式
     icon_path = RESOURCE_DIR / "icon.png"

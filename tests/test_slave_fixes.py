@@ -456,3 +456,52 @@ class TestH11SlaveSingleInstance:
         mock_lock.release.assert_called_once()
         captured = capsys.readouterr()
         assert "SlaveBackend" in captured.out
+
+    def test_ensure_console_placeholder_copies_current_executable(self, tmp_path):
+        from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"fake-exe")
+
+        with (
+            patch("slave.main.os.name", "nt"),
+            patch("slave.main.sys.frozen", True, create=True),
+        ):
+            placeholder = _ensure_console_placeholder(exe_path)
+
+        assert placeholder == tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
+        assert placeholder is not None
+        assert placeholder.read_bytes() == b"fake-exe"
+
+    def test_run_console_placeholder_waits_until_parent_exits(self):
+        from slave.main import _run_console_placeholder
+
+        with (
+            patch("slave.main.psutil.pid_exists", side_effect=[True, False]) as mock_exists,
+            patch("slave.main.time.sleep") as mock_sleep,
+        ):
+            result = _run_console_placeholder(parent_pid=4321, poll_interval_sec=0.1, max_wait_sec=1)
+
+        assert result == 0
+        assert mock_exists.call_count == 2
+        mock_sleep.assert_called_once_with(0.1)
+
+    def test_main_exits_in_console_placeholder_mode(self):
+        import pytest
+
+        from slave.main import main
+
+        with (
+            patch("slave.main._is_console_placeholder_mode", return_value=True),
+            patch("slave.main._run_console_placeholder", return_value=0) as mock_placeholder,
+            patch("slave.main.configure_slave_logging") as mock_logging,
+            patch("slave.main.QApplication") as mock_qapp,
+            patch("slave.main.sys.exit", side_effect=SystemExit) as mock_exit,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_placeholder.assert_called_once()
+        mock_logging.assert_not_called()
+        mock_qapp.assert_not_called()
+        mock_exit.assert_called_once_with(0)

@@ -71,6 +71,7 @@ deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
 	ssh $(VM_HOST) "cd $(VM_BUILD_DIR) && $(VM_PYTHON) -m PyInstaller --clean --noconfirm slave.spec"
 	@echo ">>> 部署..."
 	ssh $(VM_HOST) "copy /Y \"$(VM_BUILD_DIR)\\dist\\TriangleAlpha-Slave.exe\" \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\""
+	ssh $(VM_HOST) "copy /Y \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\" \"$(VM_DEPLOY_DIR)\\SlaveClientConsole.exe\""
 	@echo ">>> 启动..."
 	ssh $(VM_HOST) "schtasks /Create /TN StartSlave /TR \"$(VM_DEPLOY_DIR)\\TriangleAlpha-Slave.exe\" /SC ONCE /ST 00:00 /F && schtasks /Run /TN StartSlave && schtasks /Delete /TN StartSlave /F"
 	@echo ">>> 部署完成！"

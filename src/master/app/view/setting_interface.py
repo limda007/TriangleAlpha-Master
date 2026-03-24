@@ -20,7 +20,10 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
+from common.app_version import read_project_version
 from master.app.common.config import cfg
+
+APP_VERSION = read_project_version()
 
 
 class _LineEditSettingCard(SettingCard):
@@ -181,7 +184,7 @@ class SettingInterface(ScrollArea):
             "检查更新",
             FIF.INFO,
             "TriangleAlpha 群控中心",
-            "© 2026  版本 1.0.15",
+            f"© 2026  版本 {APP_VERSION}",
             self.aboutGroup,
         )
         self.aboutGroup.addSettingCard(self.aboutCard)

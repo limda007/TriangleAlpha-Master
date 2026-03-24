@@ -10,6 +10,7 @@ from pathlib import Path
 
 import psutil
 
+from common.app_version import read_project_version
 from common.protocol import (
     HEARTBEAT_INTERVAL,
     UDP_PORT,
@@ -21,22 +22,7 @@ from common.protocol import (
 )
 from slave.logging_utils import get_logger
 
-
-def _read_version() -> str:
-    """从 pyproject.toml 读取版本号。"""
-    import sys
-    if getattr(sys, "frozen", False):
-        toml_path = Path(getattr(sys, "_MEIPASS", "")) / "pyproject.toml"
-    else:
-        toml_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-    if toml_path.exists():
-        for line in toml_path.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("version"):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return "0.0.0"
-
-
-SLAVE_VERSION = _read_version()
+SLAVE_VERSION = read_project_version()
 logger = get_logger(__name__)
 
 
