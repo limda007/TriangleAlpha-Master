@@ -227,7 +227,9 @@ class SlaveBackend(QThread):
 
             was_running = running
             # 关闭弹窗浏览器（游戏安全中心等无用页面）
-            self._kill_browsers()
+            # 仅在收到过 IPC 后才杀（游戏已就绪），避免干扰启动期认证
+            if ipc_data is not None:
+                self._kill_browsers()
             await asyncio.sleep(10)
 
     @staticmethod
@@ -244,20 +246,27 @@ class SlaveBackend(QThread):
         return False
 
     _BROWSER_NAMES = {"msedge", "chrome", "firefox", "iexplore", "browser"}
+    # 路径含这些关键词的浏览器进程属于游戏内嵌组件，不能杀
+    _GAME_PATH_KEYWORDS = ("steamapps", "delta force", "tencent", "wegame", "qbblink")
 
     @staticmethod
     def _kill_browsers() -> None:
         """关闭浏览器进程（游戏安全中心等弹窗页面）"""
         killed = 0
-        for proc in psutil.process_iter(["name"], ad_value=""):
+        for proc in psutil.process_iter(["name", "exe"], ad_value=""):
             try:
                 pname = proc.info.get("name", "")
                 if not pname:
                     continue
                 base = pname.lower().removesuffix(".exe")
-                if base in SlaveBackend._BROWSER_NAMES:
-                    proc.kill()
-                    killed += 1
+                if base not in SlaveBackend._BROWSER_NAMES:
+                    continue
+                # 跳过游戏目录内的内嵌浏览器组件（如 df_launcher 的 browser.exe）
+                exe_path = (proc.info.get("exe") or "").lower()
+                if any(kw in exe_path for kw in SlaveBackend._GAME_PATH_KEYWORDS):
+                    continue
+                proc.kill()
+                killed += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         if killed:
