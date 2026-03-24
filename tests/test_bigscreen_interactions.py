@@ -7,7 +7,7 @@ from typing import cast
 from unittest.mock import MagicMock, call
 
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from common.models import NodeInfo
 from common.protocol import TcpCommand
@@ -67,6 +67,12 @@ def test_selection_change_resets_and_refills_config_panel(bigscreen, qapp: QAppl
     assert widget._cfgTeammate.currentText() == "关闭"
     assert widget._cfgWeapon.currentText() == "G17_不带药"
     assert widget._cfgLevel.value() == 18
+
+
+def test_file_page_does_not_create_export_all_button(bigscreen) -> None:
+    widget, _node_manager, _commander, _account_db = bigscreen
+
+    assert widget.findChild(QWidget, "btnExportAll") is None
 
 
 def test_one_click_start_pushes_config_only(
