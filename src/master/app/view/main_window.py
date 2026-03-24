@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
@@ -256,9 +257,19 @@ class MainWindow(FluentWindow):
             bound = self.accountPool.get_account_for_machine(machine_name)
             if bound and bound.username != node.current_account:
                 return
+        # 从 elapsed 反推登录时间，确保快速完成的账号也能记录
+        login_at = ""
+        if node.elapsed and node.elapsed != "0":
+            try:
+                elapsed_sec = int(node.elapsed)
+                if elapsed_sec > 0:
+                    login_at = (datetime.now() - timedelta(seconds=elapsed_sec)).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
         self.accountPool.update_from_status(
             machine_name, node.level, node.jin_bi, node.game_state,
             current_account=node.current_account,
+            login_at=login_at,
         )
 
     def _onAccountSync(self, machine_name: str, accounts: object) -> None:

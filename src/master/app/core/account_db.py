@@ -202,7 +202,7 @@ class AccountDB(QObject):
 
     def update_from_status(
         self, machine_name: str, level: int, jin_bi: str, state: str,
-        *, current_account: str = "",
+        *, current_account: str = "", login_at: str = "",
     ) -> None:
         """slave STATUS 上报 → 更新绑定账号的等级/金币，已完成则自动流转。
 
@@ -211,19 +211,23 @@ class AccountDB(QObject):
         防护措施：
         - level 使用 MAX 防止等级回退（等级只会增长）
         - jin_bi 仅在新值非零时更新，防止 IPC 超时/脚本停止导致零值覆盖
+        - login_at 仅在当前为空时填充（COALESCE），防止覆盖已有登录时间
         """
+        login_at_val = self._normalize_timestamp_text(login_at) or None
         # 零值保护：level 只增不减，jin_bi 零值不覆盖
         if jin_bi and jin_bi != "0":
             changed = self._conn.execute(
-                "UPDATE accounts SET level=MAX(level, ?), jin_bi=? "
+                "UPDATE accounts SET level=MAX(level, ?), jin_bi=?, "
+                "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (level, jin_bi, machine_name),
+                (level, jin_bi, login_at_val, machine_name),
             ).rowcount
         else:
             changed = self._conn.execute(
-                "UPDATE accounts SET level=MAX(level, ?) "
+                "UPDATE accounts SET level=MAX(level, ?), "
+                "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (level, machine_name),
+                (level, login_at_val, machine_name),
             ).rowcount
         if not changed and current_account:
             # 账号未经 allocate，但 TestDemo 已在使用 → 自动绑定
@@ -231,25 +235,28 @@ class AccountDB(QObject):
             if jin_bi and jin_bi != "0":
                 changed = self._conn.execute(
                     "UPDATE accounts SET level=MAX(level, ?), jin_bi=?, "
-                    "status='运行中', assigned_machine=? "
+                    "status='运行中', assigned_machine=?, "
+                    "last_login_at=COALESCE(last_login_at, ?) "
                     "WHERE username=? AND status IN ('空闲中', '运行中')",
-                    (level, jin_bi, machine_name, current_account),
+                    (level, jin_bi, machine_name, login_at_val, current_account),
                 ).rowcount
             else:
                 changed = self._conn.execute(
                     "UPDATE accounts SET level=MAX(level, ?), "
-                    "status='运行中', assigned_machine=? "
+                    "status='运行中', assigned_machine=?, "
+                    "last_login_at=COALESCE(last_login_at, ?) "
                     "WHERE username=? AND status IN ('空闲中', '运行中')",
-                    (level, machine_name, current_account),
+                    (level, machine_name, login_at_val, current_account),
                 ).rowcount
         if not changed:
             return
         if state == "已完成":
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._conn.execute(
-                "UPDATE accounts SET status='已完成', completed_at=? "
+                "UPDATE accounts SET status='已完成', completed_at=?, "
+                "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (now, machine_name),
+                (now, login_at_val, machine_name),
             )
         self._conn.commit()
         self._refresh_counts()
