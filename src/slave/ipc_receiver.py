@@ -24,6 +24,7 @@ def parse_ipc_status(data: bytes) -> dict[str, str] | None:
 
     格式: STATUS|<ignored>|{account}|{level}|{jinbi}|{status_text}|{elapsed}
     parts[1] 是 TestDemo 内部标识，原始 C# 被控完全忽略。
+    parts[2] 是 TestDemo 的账号字段（脏数据，不采纳）。
     """
     try:
         text = data.decode("utf-8")
@@ -33,7 +34,6 @@ def parse_ipc_status(data: bytes) -> dict[str, str] | None:
     if len(parts) < 7 or parts[0] != "STATUS":
         return None
     return {
-        "account": parts[2] if parts[2].isascii() else "",
         "level": parts[3],
         "jinbi": parts[4],
         "status_text": parts[5],

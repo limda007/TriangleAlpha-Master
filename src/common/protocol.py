@@ -38,20 +38,21 @@ class GameState:
         "2": "已完成",
         "3": "脚本已停止",
     }
+    # 白名单：仅接受已知状态值（防止 TestDemo 直发 STATUS 的账号名污染）
+    _KNOWN = {COMPLETED, RUNNING, SCRIPT_STOPPED}
 
     @classmethod
     def normalize(cls, raw: str) -> str:
-        """将原始状态值（数字或中文）统一为中文显示，纯数字视为无效状态"""
+        """将原始状态值（数字或中文）统一为中文显示，未知值一律丢弃"""
         match raw:
             case "" | None:
                 return ""
             case v if v in cls._CODE_MAP:
                 return cls._CODE_MAP[v]
-            case v if v.isdigit():
-                # 纯数字不是有效状态（可能是账号号码等误传）
-                return ""
+            case v if v in cls._KNOWN:
+                return v
             case _:
-                return raw
+                return ""
 
 
 @dataclass
