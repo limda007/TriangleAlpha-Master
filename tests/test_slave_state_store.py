@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from common.protocol import GameState
 from slave.backend import SlaveBackend
-from slave.state_store import SlaveStateStore
+from slave.state_store import RuntimeStatus, SlaveStateStore
 
 
 class TestSlaveStateStore:
@@ -286,6 +287,37 @@ class TestSlaveBackendStatusSnapshot:
         assert snapshot.level == 7
         assert snapshot.jin_bi == "3500"
         assert int(snapshot.elapsed) >= 28
+
+    def test_account_sync_aligns_login_time_with_elapsed(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps(
+                [
+                    {"Username": "user1", "IsActive": True},
+                    {"Username": "user2", "IsActive": False},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "account_login_state.json").write_text(
+            json.dumps(
+                {"user1": {"last_login_at": "2026-03-24 17:31:00", "was_active": True}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        backend._load_runtime_snapshot = lambda: RuntimeStatus(  # type: ignore[method-assign]
+            current_account="user1",
+            elapsed="4h56m",
+        )
+        accounts = backend._build_account_sync_accounts(now=datetime(2026, 3, 24, 19, 0, 0))
+
+        assert accounts[0]["login_at"] == "2026-03-24 14:04:00"
+
+    def test_parse_elapsed_seconds_supports_human_readable_text(self):
+        assert SlaveBackend._parse_elapsed_seconds("4h56m") == 17760
 
 
 class TestMapIpcStatus:

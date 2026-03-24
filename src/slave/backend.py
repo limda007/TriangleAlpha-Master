@@ -6,8 +6,9 @@ import base64
 import contextlib
 import json
 import os
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
@@ -416,7 +417,7 @@ class SlaveBackend(QThread):
         await asyncio.sleep(5)  # 启动延迟，等待心跳连接就绪
         while self._running:
             try:
-                accounts = self._state_store.load_all_game_accounts()
+                accounts = self._build_account_sync_accounts()
                 if accounts:
                     payload = json.dumps(accounts, ensure_ascii=False, separators=(",", ":"))
                     payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
@@ -437,3 +438,57 @@ class SlaveBackend(QThread):
         for task in self._tasks:
             if not task.done():
                 task.cancel()
+
+    def _build_account_sync_accounts(self, now: datetime | None = None) -> list[dict[str, object]]:
+        """构建待同步账号快照，并用运行时长校正当前活跃账号的登录时间。"""
+        accounts = self._state_store.load_all_game_accounts()
+        if not accounts:
+            return accounts
+        snapshot = self._load_runtime_snapshot()
+        self._align_active_account_login_at(accounts, snapshot, now=now)
+        return accounts
+
+    def _align_active_account_login_at(
+        self,
+        accounts: list[dict[str, object]],
+        snapshot: RuntimeStatus,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        current_account = snapshot.current_account.strip()
+        if not current_account:
+            return
+        login_at = self._derive_login_at(snapshot.elapsed, now=now)
+        if not login_at:
+            return
+        for account in accounts:
+            username = str(account.get("username", "")).strip()
+            if username != current_account:
+                continue
+            account["login_at"] = login_at
+            return
+
+    @staticmethod
+    def _derive_login_at(elapsed: object, *, now: datetime | None = None) -> str | None:
+        elapsed_seconds = SlaveBackend._parse_elapsed_seconds(elapsed)
+        if elapsed_seconds is None:
+            return None
+        current_time = now or datetime.now()
+        return (current_time - timedelta(seconds=elapsed_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _parse_elapsed_seconds(raw: object) -> int | None:
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text:
+            return None
+        with contextlib.suppress(ValueError):
+            return max(0, int(text))
+        match = re.fullmatch(r"(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?", text)
+        if not match or not match.group(0):
+            return None
+        hours = int(match.group("hours") or "0")
+        minutes = int(match.group("minutes") or "0")
+        seconds = int(match.group("seconds") or "0")
+        return hours * 3600 + minutes * 60 + seconds

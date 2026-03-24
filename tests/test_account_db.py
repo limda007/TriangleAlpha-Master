@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ _SAMPLE = "u1----p1----e1----ep1----note1\nu2----p2\nu3----p3----e3----ep3"
 
 
 @pytest.fixture()
-def db(tmp_path: Path) -> AccountDB:
+def db(tmp_path: Path) -> Generator[AccountDB, None, None]:
     """每个测试一个干净的 DB"""
     d = AccountDB(tmp_path / "test.db")
     yield d
@@ -424,6 +425,23 @@ class TestUpsertFromSync:
         acc = db.get_all_accounts()[0]
         assert acc.last_login_at is not None
         assert acc.last_login_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-24 11:00:00"
+
+    def test_active_account_login_time_allows_runtime_correction_to_earlier(self, db: AccountDB) -> None:
+        db.import_fresh("u1----p1")
+        db._conn.execute(
+            "UPDATE accounts SET last_login_at='2026-03-24 17:31:00' WHERE username='u1'"
+        )
+        db._conn.commit()
+        accounts = [
+            {"username": "u1", "level": 20, "jin_bi": "9999",
+             "is_banned": False, "is_active": True, "login_at": "2026-03-24 14:04:00"},
+        ]
+
+        db.upsert_from_sync("VM-01", accounts)
+
+        acc = db.get_all_accounts()[0]
+        assert acc.last_login_at is not None
+        assert acc.last_login_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-24 14:04:00"
 
     def test_sync_does_not_change_status(self, db: AccountDB) -> None:
         """SYNC 不改变已有账号状态"""

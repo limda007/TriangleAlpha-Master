@@ -311,7 +311,11 @@ class AccountDB(QObject):
                 inserted += 1
                 continue
 
-            last_login_at = self._merge_timestamp_text(existing["last_login_at"], login_at)
+            last_login_at = self._resolve_last_login_at(
+                existing["last_login_at"],
+                login_at,
+                is_active=is_active,
+            )
             current_login_at = self._normalize_timestamp_text(existing["last_login_at"]) or None
 
             # 已有账号：封禁检测
@@ -631,6 +635,12 @@ class AccountDB(QObject):
         if not incoming:
             return current
         return max(current, incoming)
+
+    @staticmethod
+    def _resolve_last_login_at(existing: object, incoming: str, *, is_active: bool) -> str | None:
+        if is_active and incoming:
+            return incoming
+        return AccountDB._merge_timestamp_text(existing, incoming)
 
     def _update_last_login_at(self, account_id: int, last_login_at: str | None) -> bool:
         row = self._conn.execute(
