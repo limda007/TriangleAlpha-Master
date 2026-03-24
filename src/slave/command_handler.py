@@ -23,9 +23,6 @@ class CommandHandler:
     READ_TIMEOUT = 120
     SELF_UPDATE_GRACE_SEC = 2.0
 
-    # 允许远程写入的配置文件白名单
-    _CONFIG_WHITELIST = {"补齐队友配置.txt", "武器配置.txt", "下号等级.txt", "舔包次数.txt", "token.txt"}
-
     def __init__(
         self,
         base_dir: str,
@@ -214,9 +211,6 @@ class CommandHandler:
             logger.error("配置格式错误，需要 filename|content")
             return ""
         filename = filename.strip()
-        if filename not in self._CONFIG_WHITELIST:
-            logger.warning("拒绝写入非白名单文件: %s", filename)
-            return ""
         fpath = self._safe_path(filename)
         if fpath is None:
             return ""

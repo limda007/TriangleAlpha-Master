@@ -7,7 +7,7 @@ import inspect
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from common.protocol import TcpCommand
+from common.protocol import ParsedTcpCommand, TcpCommand
 
 # ── C5: 路径遍历防护 ──
 
@@ -42,6 +42,45 @@ class TestC5PathTraversal:
         h = self._handler(tmp_path)
         result = h._safe_path("data/file.txt")
         assert result is not None
+
+
+class TestC5SetConfigPathGuard:
+    """验证配置下发移除白名单后，仅保留路径安全限制。"""
+
+    def _handler(self, tmp_path):
+        from slave.command_handler import CommandHandler
+
+        return CommandHandler(str(tmp_path))
+
+    def test_allows_binary_in_base_dir(self, tmp_path):
+        handler = self._handler(tmp_path)
+        payload = "SlaveClientConsole.exe|BASE64:" + base64.b64encode(b"fake-exe").decode("ascii")
+
+        desc = handler._handle_set_config(ParsedTcpCommand(TcpCommand.EXT_SET_CONFIG, payload))
+
+        target = tmp_path / "SlaveClientConsole.exe"
+        assert desc == "文件已更新: SlaveClientConsole.exe"
+        assert target.read_bytes() == b"fake-exe"
+
+    def test_allows_arbitrary_relative_file(self, tmp_path):
+        handler = self._handler(tmp_path)
+        (tmp_path / "configs").mkdir()
+        payload = "configs/custom.bin|BASE64:" + base64.b64encode(b"hello").decode("ascii")
+
+        desc = handler._handle_set_config(ParsedTcpCommand(TcpCommand.EXT_SET_CONFIG, payload))
+
+        target = tmp_path / "configs" / "custom.bin"
+        assert desc == "文件已更新: configs/custom.bin"
+        assert target.read_bytes() == b"hello"
+
+    def test_rejects_traversal_even_without_whitelist(self, tmp_path):
+        handler = self._handler(tmp_path)
+        payload = "../OtherConsole.exe|BASE64:" + base64.b64encode(b"fake-exe").decode("ascii")
+
+        desc = handler._handle_set_config(ParsedTcpCommand(TcpCommand.EXT_SET_CONFIG, payload))
+
+        assert desc == ""
+        assert not (tmp_path.parent / "OtherConsole.exe").exists()
 
 
 # ── C6: 进程句柄管理 ──
