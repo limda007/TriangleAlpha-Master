@@ -75,6 +75,9 @@ class TestTcpUpdateTxtE2E:
     def test_update_txt_roundtrip(self, tmp_path):
         port = _free_port()
         accounts = "user1----pass1\nuser2----pass2"
+        (tmp_path / "accounts.json").write_text('{"stale": true}', encoding="utf-8")
+        (tmp_path / "accounts.imported").write_text("old", encoding="utf-8")
+        (tmp_path / "runtime_status.json").write_text('{"current_account":"old-user"}', encoding="utf-8")
 
         async def run():
             from slave.command_handler import CommandHandler
@@ -97,6 +100,9 @@ class TestTcpUpdateTxtE2E:
             f = tmp_path / "accounts.txt"
             assert f.exists()
             assert f.read_text(encoding="utf-8") == accounts
+            assert not (tmp_path / "accounts.json").exists()
+            assert not (tmp_path / "accounts.imported").exists()
+            assert not (tmp_path / "runtime_status.json").exists()
 
             server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

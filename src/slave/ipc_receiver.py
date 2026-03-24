@@ -93,6 +93,11 @@ class LocalIpcReceiver:
         age = time.monotonic() - self._last_sync
         return dict(self._data), age
 
+    def clear_snapshot(self) -> None:
+        """清空缓存，避免换号后沿用旧 IPC 状态。"""
+        self._data = None
+        self._last_sync = 0.0
+
     def _on_message(self, data: dict[str, str]) -> None:
         self._data = data
         self._last_sync = time.monotonic()

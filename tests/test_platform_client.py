@@ -17,7 +17,7 @@ def _make_transport(handler):
 class TestLogin:
     def test_login_success(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/api/v1/login"
+            assert request.url.path == "/api/v1/auth/login"
             body = json.loads(request.content)
             assert body["username"] == "user"
             assert body["password"] == "pass"
@@ -100,7 +100,7 @@ class TestImportAccounts:
                 if call_count["import"] == 1:
                     return httpx.Response(401, json={"error": "expired"})
                 return httpx.Response(200, json={"imported": 1})
-            if request.url.path == "/api/v1/refresh":
+            if request.url.path == "/api/v1/auth/refresh":
                 return httpx.Response(200, json={
                     "access_token": "at_refreshed",
                 })
@@ -126,9 +126,9 @@ class TestImportAccounts:
                 if call_count["import"] == 1:
                     return httpx.Response(401, json={"error": "expired"})
                 return httpx.Response(200, json={"imported": 1})
-            if request.url.path == "/api/v1/refresh":
+            if request.url.path == "/api/v1/auth/refresh":
                 return httpx.Response(401, json={"error": "invalid_rt"})
-            if request.url.path == "/api/v1/login":
+            if request.url.path == "/api/v1/auth/login":
                 return httpx.Response(200, json={
                     "access_token": "at_relogin",
                     "refresh_token": "rt_relogin",

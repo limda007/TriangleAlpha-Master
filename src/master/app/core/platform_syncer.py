@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAX_AUTH_FAILURES = 3
+_UPLOAD_BATCH_SIZE = 200
 
 
 class _SyncWorker(QThread):
@@ -141,6 +142,7 @@ class PlatformSyncer(QObject):
 
         # 节流上传检查（Architect #4）
         self._upload_dirty = False
+        self._resume_upload_after_worker = False
         self._upload_throttle = QTimer(self)
         self._upload_throttle.setSingleShot(True)
         self._upload_throttle.setInterval(5000)
@@ -251,8 +253,9 @@ class PlatformSyncer(QObject):
         # 互斥：worker 正在运行时跳过（Architect #3）
         if self._worker and self._worker.isRunning():
             self._upload_dirty = True  # 标记脏位，worker 完成后重新检查
+            self._resume_upload_after_worker = True
             return
-        pending = self._db.get_completed_not_uploaded()
+        pending = self._db.get_completed_not_uploaded(limit=_UPLOAD_BATCH_SIZE)
         if not pending:
             return
         text = self._build_upload_text(pending)
@@ -278,10 +281,11 @@ class PlatformSyncer(QObject):
         self._last_sync_time = datetime.now().strftime("%H:%M:%S")
         self.upload_finished.emit(count)
         self.status_changed.emit("已连接")
-        # 检查是否有积压的脏数据
+        # 满批次上传后继续拉下一批，避免 >200 账号时一次性卡住主线程/平台。
+        if len(usernames) >= _UPLOAD_BATCH_SIZE:
+            self._upload_dirty = True
         if self._upload_dirty:
-            self._upload_dirty = False
-            QTimer.singleShot(1000, self.try_upload_completed)
+            self._resume_upload_after_worker = True
 
     @staticmethod
     def _build_upload_text(accounts: list[AccountInfo]) -> str:
@@ -350,6 +354,16 @@ class PlatformSyncer(QObject):
         self._worker = None
         if w is not None:
             w.deleteLater()
+        if self._resume_upload_after_worker:
+            self._resume_upload_after_worker = False
+            QTimer.singleShot(0, self._resume_pending_upload)
+
+    def _resume_pending_upload(self) -> None:
+        """在任意后台任务结束后恢复待处理上传。"""
+        if not self._upload_dirty:
+            return
+        self._upload_dirty = False
+        self.try_upload_completed()
 
     def _on_tokens_updated(self, at: str, rt: str) -> None:
         """Token 更新 → 持久化到 DB（主线程）"""

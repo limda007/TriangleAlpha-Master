@@ -134,6 +134,10 @@ class SlaveBackend(QThread):
         self.command_received.emit(desc)
 
     def _on_account_updated(self, count: int) -> None:
+        # 新账号下发后立即丢弃本地旧运行态，避免旧号通过磁盘/IPC 缓存回流。
+        self._state_store.clear_runtime_status()
+        self._last_ipc_jin_bi = "0"
+        self._ipc.clear_snapshot()
         self.account_updated.emit(count)
 
     def _on_group_changed(self, group: str) -> None:
@@ -352,17 +356,16 @@ class SlaveBackend(QThread):
                 status_text=raw_status,
             )
 
-        # ── 文件兜底：读 runtime_status.json ──
+        # ── 文件兜底：仅读取数值状态，不再信任磁盘里的 current_account ──
         snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
-        if not snapshot.current_account and active_acc is not None:
-            snapshot = RuntimeStatus(
-                state=snapshot.state,
-                level=snapshot.level or active_level,
-                jin_bi=snapshot.jin_bi if snapshot.jin_bi != "0" else active_jin_bi,
-                current_account=active_name,
-                elapsed=snapshot.elapsed,
-                status_text=snapshot.status_text,
-            )
+        snapshot = RuntimeStatus(
+            state=snapshot.state,
+            level=snapshot.level or active_level,
+            jin_bi=snapshot.jin_bi if snapshot.jin_bi != "0" else active_jin_bi,
+            current_account=active_name,
+            elapsed=snapshot.elapsed,
+            status_text=snapshot.status_text,
+        )
         if snapshot.state == GameState.SCRIPT_STOPPED:
             return RuntimeStatus(
                 state=GameState.RUNNING,

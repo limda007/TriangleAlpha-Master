@@ -1,6 +1,9 @@
 """卡密管理页面 — 导入/刷新/分配/删除"""
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -293,7 +296,7 @@ class KamiInterface(ScrollArea):
 
     def _startWorker(
         self, kami_codes: list[str],
-        on_done: object,
+        on_done: Callable[[list[dict]], None],
     ) -> None:
         self.btnImport.setEnabled(False)
         self.btnRefresh.setEnabled(False)
@@ -447,7 +450,7 @@ class KamiInterface(ScrollArea):
     def _getKamiId(self, row: int) -> int | None:
         item = self.table.item(row, 0)
         if item:
-            return item.data(Qt.ItemDataRole.UserRole)
+            return cast(int | None, item.data(Qt.ItemDataRole.UserRole))
         return None
 
     def _getSelectedKamiIds(self) -> list[int]:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QCloseEvent, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -108,6 +108,14 @@ _ACCOUNT_STATUS_COLORS: dict[str, QColor] = {
     "运行中": QColor("#3b82f6"),
     "已完成": QColor("#22c55e"),
     "已取号": QColor("#8b5cf6"),
+}
+_ACCOUNT_PANEL_COLUMN_WIDTHS = {
+    2: 86,
+    3: 112,
+    4: 64,
+    5: 80,
+    6: 132,
+    7: 96,
 }
 
 _WEAPONS = [
@@ -231,14 +239,19 @@ class BigScreenInterface(ScrollArea):
         self._tableRefreshTimer.setInterval(100)
         self._tableRefreshTimer.timeout.connect(self._refreshNodeTable)
 
+        # 账号面板防抖刷新定时器
+        self._accountRefreshTimer = QTimer(self)
+        self._accountRefreshTimer.setSingleShot(True)
+        self._accountRefreshTimer.setInterval(100)
+        self._accountRefreshTimer.timeout.connect(self._flushAccountRefresh)
+
         # ═══ 信号连接 ═══
         self._nm.node_online.connect(self._scheduleRefreshTable)
         self._nm.node_updated.connect(self._scheduleRefreshTable)
         self._nm.node_offline.connect(self._scheduleRefreshTable)
         self._nm.node_offline.connect(self._onNodeOffline)
         self._nm.stats_changed.connect(self._refreshHeader)
-        self._pool.pool_changed.connect(self._refreshAccountStats)
-        self._pool.pool_changed.connect(self._refreshAccountTable)
+        self._pool.pool_changed.connect(self._scheduleAccountRefresh)
 
         self._tcp.command_failed.connect(self._onCmdFailed)
 
@@ -264,8 +277,7 @@ class BigScreenInterface(ScrollArea):
         self._watchdogTimer.timeout.connect(self._checkStaleNodes)
 
         # 启动时从 DB 同步数据到 UI
-        self._refreshAccountTable()
-        self._refreshAccountStats()
+        self._flushAccountRefresh()
 
     # ──────────────────────────────────────────────────────
     # 构建 UI
@@ -328,6 +340,25 @@ class BigScreenInterface(ScrollArea):
         lbl = badge.findChild(QLabel, "badgeText")
         if lbl:
             lbl.setText(text)
+
+    def _scheduleAccountRefresh(self) -> None:
+        if not self._accountRefreshTimer.isActive():
+            self._accountRefreshTimer.start()
+
+    def _flushAccountRefresh(self) -> None:
+        self._refreshAccountStats()
+        self._refreshAccountTable()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._tableRefreshTimer.stop()
+        self._accountRefreshTimer.stop()
+        self._offlineBatchTimer.stop()
+        self._uptimeTimer.stop()
+        self._watchdogTimer.stop()
+        worker = getattr(self, "_balance_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait(1000)
+        super().closeEvent(event)
 
     def _buildNodeTable(self) -> TableWidget:
         """节点实时状态表格（严格对齐 AccountInterface 写法）"""
@@ -399,8 +430,13 @@ class BigScreenInterface(ScrollArea):
         self.accountTable.verticalHeader().hide()
         header = self.accountTable.horizontalHeader()
         header.setMinimumSectionSize(60)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for col, width in _ACCOUNT_PANEL_COLUMN_WIDTHS.items():
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self.accountTable.setColumnWidth(col, width)
         header.setStretchLastSection(False)
+        self.accountTable.verticalHeader().setDefaultSectionSize(28)
         self.accountTable.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.accountTable.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -1046,7 +1082,7 @@ class BigScreenInterface(ScrollArea):
 
     def _refreshAccountTable(self) -> None:
         """从 AccountDB 刷新账号表格（仅显示空闲中）"""
-        accounts = [a for a in self._pool.get_all_accounts() if a.status.value == "空闲中"]
+        accounts = self._pool.get_idle_accounts()
         self.accountTable.setUpdatesEnabled(False)
         self.accountTable.setRowCount(len(accounts))
         for row, acc in enumerate(accounts):

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QCloseEvent, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
-    QLabel,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -47,6 +47,16 @@ _STATUS_COLORS: dict[str, tuple[str, str]] = {
     "已完成": ("#fff3e0", "#e65100"),
     "已取号": ("#f3e5f5", "#6a1b9a"),
     "已封禁": ("#ffebee", "#c62828"),
+}
+_COLUMN_WIDTHS = {
+    1: 92,
+    3: 108,
+    4: 86,
+    5: 112,
+    6: 64,
+    7: 80,
+    8: 132,
+    9: 96,
 }
 
 
@@ -101,9 +111,13 @@ class AccountInterface(ScrollArea):
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setMinimumSectionSize(120)
-        for col in range(1, len(_HEADERS)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setMinimumSectionSize(64)
+        header.setStretchLastSection(False)
+        for col, width in _COLUMN_WIDTHS.items():
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(col, width)
+        self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.cellClicked.connect(self._onCellClicked)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._showContextMenu)
@@ -125,7 +139,11 @@ class AccountInterface(ScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # ── 信号 ──
-        self._pool.pool_changed.connect(self._refreshTable)
+        self._refreshTimer = QTimer(self)
+        self._refreshTimer.setSingleShot(True)
+        self._refreshTimer.setInterval(100)
+        self._refreshTimer.timeout.connect(self._refreshTable)
+        self._pool.pool_changed.connect(self._scheduleRefreshTable)
         self.btnImport.clicked.connect(self._importAccounts)
         self.btnExtract.clicked.connect(self._extractCompleted)
         self.btnExportAll.clicked.connect(self._exportAll)
@@ -134,6 +152,14 @@ class AccountInterface(ScrollArea):
 
         # 首次加载
         self._refreshTable()
+
+    def _scheduleRefreshTable(self) -> None:
+        if not self._refreshTimer.isActive():
+            self._refreshTimer.start()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._refreshTimer.stop()
+        super().closeEvent(event)
 
     def _refreshTable(self) -> None:
         self._revealed.clear()
@@ -167,21 +193,13 @@ class AccountInterface(ScrollArea):
                     item.setData(Qt.ItemDataRole.UserRole, acc.bind_email_password)
                 # 状态列：扁平圆角标签
                 if col == _STATUS_COL:
-                    item.setText("")
                     item.setData(Qt.ItemDataRole.UserRole, text)
                     bg, fg = _STATUS_COLORS.get(text, ("#f5f5f5", "#333333"))
-                    tag = QLabel(text)
-                    tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    tag.setStyleSheet(
-                        f"background:{bg}; color:{fg}; border-radius:4px;"
-                        " padding:2px 8px; font-size:12px;"
-                    )
-                    container = QWidget()
-                    lay = QHBoxLayout(container)
-                    lay.setContentsMargins(4, 2, 4, 2)
-                    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    lay.addWidget(tag)
-                    self.table.setCellWidget(row, col, container)
+                    self.table.removeCellWidget(row, col)
+                    item.setText(text)
+                    item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
+                    item.setBackground(QColor(bg))
+                    item.setForeground(QColor(fg))
         self.table.setUpdatesEnabled(True)
         self._refreshStats()
         self._applyFilter()

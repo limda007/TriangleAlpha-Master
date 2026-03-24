@@ -156,12 +156,25 @@ class CommandHandler:
             logger.error("UPDATETXT 解码失败: %s", err)
             return ""
         (self._base_dir / "accounts.txt").write_text(content, encoding="utf-8")
+        self._clear_stale_account_runtime_files()
         count = sum(1 for line in content.splitlines() if line.strip())
         desc = f"账号已更新 ({count}个)"
         logger.info("接收: %s", desc)
         if self._on_account_updated:
             self._on_account_updated(count)
         return desc
+
+    def _clear_stale_account_runtime_files(self) -> None:
+        """下发新账号后清理 TestDemo 遗留状态，避免旧号重新回流。"""
+        for filename in ("accounts.json", "accounts.imported", "runtime_status.json"):
+            fpath = self._base_dir / filename
+            if not fpath.exists():
+                continue
+            try:
+                fpath.unlink()
+                logger.info("已清理旧账号状态文件: %s", filename)
+            except OSError:
+                logger.exception("清理旧账号状态文件失败: %s", filename)
 
     def _handle_update_key(self, parsed: ParsedTcpCommand) -> str:
         """处理 Key 更新指令。"""

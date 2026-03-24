@@ -704,6 +704,22 @@ class TestPlatformUpload:
         assert len(pending) == 1
         assert pending[0].username == "u2"
 
+    def test_get_completed_not_uploaded_respects_limit(self, db: AccountDB) -> None:
+        """limit 应限制单次上传批量，避免 >200 账号一次性处理。"""
+        lines = "\n".join(f"u{i}----p{i}" for i in range(205))
+        db.import_fresh(lines)
+        db._conn.execute(
+            "UPDATE accounts SET status='已完成', completed_at='2026-03-25 10:00:00'"
+        )
+        db._conn.commit()
+        db._refresh_counts()
+
+        pending = db.get_completed_not_uploaded(limit=200)
+
+        assert len(pending) == 200
+        assert pending[0].username == "u0"
+        assert pending[-1].username == "u199"
+
     def test_mark_uploaded(self, db: AccountDB) -> None:
         """mark_uploaded 设置 uploaded_at 时间戳"""
         db.import_fresh("u1----p1\nu2----p2")

@@ -263,7 +263,7 @@ class TestSlaveBackendStatusSnapshot:
         assert snapshot.state == GameState.RUNNING
         assert snapshot.level == 5
         assert snapshot.jin_bi == "88"
-        assert snapshot.current_account == "user-a"
+        assert snapshot.current_account == ""
         assert int(snapshot.elapsed) >= 10
 
     def test_runtime_snapshot_falls_back_to_accounts_json(self, tmp_path: Path):
@@ -402,7 +402,7 @@ class TestIpcPriorityInSnapshot:
         backend._ipc._last_sync = time.monotonic() - 20  # 过期 20s
 
         snapshot = backend._load_runtime_snapshot()
-        assert snapshot.current_account == "file-acc"
+        assert snapshot.current_account == ""
         assert snapshot.level == 5
 
     def test_no_ipc_uses_file(self, tmp_path: Path):
@@ -422,4 +422,28 @@ class TestIpcPriorityInSnapshot:
         backend._ipc = LocalIpcReceiver()
 
         snapshot = backend._load_runtime_snapshot()
-        assert snapshot.current_account == "file-only"
+        assert snapshot.current_account == ""
+        assert snapshot.jin_bi == "600"
+
+    def test_on_account_updated_clears_stale_runtime_state(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+        (tmp_path / "runtime_status.json").write_text(
+            json.dumps({"current_account": "stale-user"}),
+            encoding="utf-8",
+        )
+        backend._last_ipc_jin_bi = "9999"
+        backend._ipc._on_message({
+            "account": "stale-user",
+            "level": "12",
+            "jinbi": "9999",
+            "status_text": "运行中",
+            "elapsed": "30",
+        })
+
+        backend._on_account_updated(2)
+
+        assert not (tmp_path / "runtime_status.json").exists()
+        data, age = backend._ipc.snapshot()
+        assert data is None
+        assert age == float("inf")
+        assert backend._last_ipc_jin_bi == "0"

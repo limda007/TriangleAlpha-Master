@@ -13,7 +13,7 @@ class TestParseIpcStatus:
         raw = b"STATUS|placeholder|account01|15|3500|\xe8\xbf\x90\xe8\xa1\x8c\xe4\xb8\xad|120"
         result = parse_ipc_status(raw)
         assert result is not None
-        assert result["account"] == "account01"
+        assert "account" not in result
         assert result["level"] == "15"
         assert result["jinbi"] == "3500"
         assert result["status_text"] == "运行中"
@@ -24,7 +24,8 @@ class TestParseIpcStatus:
         raw = b"STATUS|anything_here|acc|10|500|ok|60"
         result = parse_ipc_status(raw)
         assert result is not None
-        assert result["account"] == "acc"
+        assert "account" not in result
+        assert result["level"] == "10"
 
     def test_too_few_fields_returns_none(self):
         assert parse_ipc_status(b"STATUS|only|three") is None
@@ -42,7 +43,8 @@ class TestParseIpcStatus:
         raw = b"STATUS|x|acc|10|500|ok|60|extra1|extra2"
         result = parse_ipc_status(raw)
         assert result is not None
-        assert result["account"] == "acc"
+        assert "account" not in result
+        assert result["elapsed"] == "60"
 
 
 class TestLocalIpcReceiver:

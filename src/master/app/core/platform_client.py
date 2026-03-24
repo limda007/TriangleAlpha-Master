@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import cast
 
 import httpx
 
@@ -112,7 +113,7 @@ class PlatformClient:
 
     def import_accounts(
         self, client: httpx.Client, text: str, group_name: str,
-    ) -> dict:
+    ) -> dict[str, object]:
         """上传账号到平台（multipart/form-data）"""
         resp = self._retry_on_401(
             client, "POST",
@@ -126,7 +127,10 @@ class PlatformClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise PlatformAPIError(f"上传失败({resp.status_code})：{resp.text}") from e
-        return resp.json()
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise PlatformAPIError("上传失败：响应格式错误")
+        return cast(dict[str, object], data)
 
     def query_accounts(
         self, client: httpx.Client, group_name: str,

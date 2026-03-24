@@ -1,6 +1,7 @@
 """Master 核心组件联调测试 — 验证所有修复项"""
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -276,6 +277,152 @@ class TestPlatformUploadFormat:
             "afxgc1070----18----2390K----正常----无----2026-03-24 10:08:39----"
             "2026-03-24 13:08:39"
         )
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self._slots: list[object] = []
+
+    def connect(self, slot: object) -> None:
+        self._slots.append(slot)
+
+
+class _FakeSyncWorker:
+    instances: list[_FakeSyncWorker] = []
+
+    def __init__(
+        self,
+        _client_cfg: object,
+        task: str,
+        upload_text: str = "",
+        group_name: str = "",
+        upload_usernames: list[str] | None = None,
+        parent: object | None = None,
+    ) -> None:
+        self.task = task
+        self.upload_text = upload_text
+        self.group_name = group_name
+        self.upload_usernames = upload_usernames or []
+        self.parent = parent
+        self.upload_done = _FakeSignal()
+        self.poll_done = _FakeSignal()
+        self.tokens_updated = _FakeSignal()
+        self.error_occurred = _FakeSignal()
+        self.finished = _FakeSignal()
+        self._running = False
+        self.__class__.instances.append(self)
+
+    def start(self) -> None:
+        self._running = True
+
+    def isRunning(self) -> bool:
+        return self._running
+
+    def quit(self) -> None:
+        self._running = False
+
+    def wait(self, _timeout: int) -> bool:
+        return True
+
+    def deleteLater(self) -> None:
+        return None
+
+
+class TestPlatformUploadBatching:
+    """验证平台同步一次只上传 200 个账号，避免大批量卡死。"""
+
+    def test_try_upload_completed_limits_batch_size(self, tmp_path, monkeypatch) -> None:
+        import master.app.core.platform_syncer as platform_syncer_module
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            lines = "\n".join(f"u{i}----p{i}" for i in range(205))
+            db.import_fresh(lines)
+            db._conn.execute(
+                "UPDATE accounts SET status='已完成', completed_at='2026-03-25 10:00:00'"
+            )
+            db._conn.commit()
+            db._refresh_counts()
+
+            _FakeSyncWorker.instances.clear()
+            monkeypatch.setattr(platform_syncer_module, "_SyncWorker", _FakeSyncWorker)
+
+            syncer = PlatformSyncer(db)
+            syncer._enabled = True
+            syncer._api_url = "http://example.com"
+            syncer._group_name = "group-a"
+
+            syncer.try_upload_completed()
+
+            assert len(_FakeSyncWorker.instances) == 1
+            worker = _FakeSyncWorker.instances[0]
+            assert worker.task == "upload"
+            assert worker.group_name == "group-a"
+            assert len(worker.upload_usernames) == 200
+            assert worker.upload_usernames[0] == "u0"
+            assert worker.upload_usernames[-1] == "u199"
+            assert len(worker.upload_text.splitlines()) == 201
+        finally:
+            db.close()
+
+    def test_pending_upload_resumes_after_other_worker_finishes(self, tmp_path, monkeypatch) -> None:
+        import master.app.core.platform_syncer as platform_syncer_module
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            lines = "\n".join(f"u{i}----p{i}" for i in range(205))
+            db.import_fresh(lines)
+            db._conn.execute(
+                "UPDATE accounts SET status='已完成', completed_at='2026-03-25 10:00:00'"
+            )
+            db._conn.commit()
+            db._refresh_counts()
+
+            _FakeSyncWorker.instances.clear()
+            monkeypatch.setattr(platform_syncer_module, "_SyncWorker", _FakeSyncWorker)
+            scheduled: list[Callable[[], None]] = []
+            monkeypatch.setattr(
+                platform_syncer_module.QTimer,
+                "singleShot",
+                staticmethod(lambda _ms, callback: scheduled.append(callback)),
+            )
+
+            syncer = PlatformSyncer(db)
+            syncer._enabled = True
+            syncer._api_url = "http://example.com"
+            syncer._group_name = "group-a"
+
+            first_batch = [f"u{i}" for i in range(200)]
+            upload_worker = _FakeSyncWorker(syncer._client, "upload", upload_usernames=first_batch)
+            syncer._worker = upload_worker  # type: ignore[assignment]
+
+            syncer._on_upload_done(first_batch)
+            syncer._cleanup_worker()
+
+            assert len(scheduled) == 1
+
+            blocking_worker = _FakeSyncWorker(syncer._client, "poll")
+            blocking_worker._running = True
+            syncer._worker = blocking_worker  # type: ignore[assignment]
+
+            callback = scheduled.pop()
+            callback()
+
+            assert syncer._upload_dirty is True
+            assert syncer._resume_upload_after_worker is True
+
+            blocking_worker._running = False
+            syncer._cleanup_worker()
+
+            assert len(scheduled) == 1
+
+            callback = scheduled.pop()
+            callback()
+
+            assert len(_FakeSyncWorker.instances[-1].upload_usernames) == 5
+            assert _FakeSyncWorker.instances[-1].upload_usernames == [f"u{i}" for i in range(200, 205)]
+        finally:
+            db.close()
 
 
 # ── M10-fix: history 上限 ──

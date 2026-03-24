@@ -137,8 +137,7 @@ class AccountDB(QObject):
         return self.load_from_text(text)
 
     def _insert_lines(self, text: str) -> tuple[int, int]:
-        inserted = 0
-        skipped = 0
+        rows: list[tuple[str, str, str, str, str]] = []
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -146,17 +145,26 @@ class AccountDB(QObject):
             acc = AccountInfo.from_line(line)
             if not acc.username:
                 continue
-            cur = self._conn.execute(
-                "INSERT OR IGNORE INTO accounts "
-                "(username, password, bind_email, bind_email_pwd, notes) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (acc.username, acc.password, acc.bind_email,
-                 acc.bind_email_password, acc.notes),
+            rows.append(
+                (
+                    acc.username,
+                    acc.password,
+                    acc.bind_email,
+                    acc.bind_email_password,
+                    acc.notes,
+                )
             )
-            if cur.rowcount > 0:
-                inserted += 1
-            else:
-                skipped += 1
+        if not rows:
+            return 0, 0
+        before_changes = self._conn.total_changes
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO accounts "
+            "(username, password, bind_email, bind_email_pwd, notes) "
+            "VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        inserted = self._conn.total_changes - before_changes
+        skipped = len(rows) - inserted
         return inserted, skipped
 
     # ── 分配 / 回收 ───────────────────────────────────────
@@ -396,14 +404,26 @@ class AccountDB(QObject):
         cur = self._conn.execute("SELECT * FROM accounts ORDER BY id")
         return [self._row_to_info(r) for r in cur.fetchall()]
 
+    def get_idle_accounts(self) -> list[AccountInfo]:
+        """查询所有空闲账号，避免大屏为过滤空闲账号加载全表。"""
+        cur = self._conn.execute(
+            "SELECT * FROM accounts WHERE status='空闲中' ORDER BY id"
+        )
+        return [self._row_to_info(r) for r in cur.fetchall()]
+
     # ── 导出 ───────────────────────────────────────────────
 
-    def get_completed_not_uploaded(self) -> list[AccountInfo]:
+    def get_completed_not_uploaded(self, limit: int | None = None) -> list[AccountInfo]:
         """查询已完成但未上传到平台的账号"""
-        cur = self._conn.execute(
+        sql = (
             "SELECT * FROM accounts WHERE status='已完成' AND uploaded_at IS NULL "
-            "ORDER BY id",
+            "ORDER BY id"
         )
+        params: tuple[object, ...] = ()
+        if limit is not None and limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        cur = self._conn.execute(sql, params)
         return [self._row_to_info(r) for r in cur.fetchall()]
 
     def mark_uploaded(self, usernames: list[str]) -> int:
@@ -411,15 +431,15 @@ class AccountDB(QObject):
         if not usernames:
             return 0
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        total = 0
-        for username in usernames:
-            total += self._conn.execute(
-                "UPDATE accounts SET uploaded_at=? "
-                "WHERE username=? AND status='已完成' AND uploaded_at IS NULL",
-                (now, username),
-            ).rowcount
+        placeholders = ",".join("?" for _ in usernames)
+        cur = self._conn.execute(
+            "UPDATE accounts SET uploaded_at=? "
+            f"WHERE username IN ({placeholders}) "  # noqa: S608
+            "AND status='已完成' AND uploaded_at IS NULL",
+            (now, *usernames),
+        )
         self._conn.commit()
-        return total
+        return cur.rowcount
 
     def mark_taken_by_platform(self, usernames: list[str]) -> int:
         """平台确认账号已被取号 → 本地状态流转为 '已取号'"""
