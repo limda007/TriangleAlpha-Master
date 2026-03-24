@@ -80,6 +80,8 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'common.protocol',
+        'common.app_version',
+        'common_app_version',
         'slave.logging_utils',
         'slave.runtime_paths',
         'slave.state_store',

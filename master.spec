@@ -7,6 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 ROOT_DIR = Path(SPECPATH).resolve()
 RESOURCE_DIR = ROOT_DIR / 'src' / 'master' / 'app' / 'resource'
 
@@ -57,9 +59,6 @@ def _build_macos_icon() -> str | None:
 
     return str(icon_path)
 
-
-from PyInstaller.utils.hooks import collect_all
-
 httpx_datas, httpx_binaries, httpx_hiddenimports = collect_all('httpx')
 httpcore_datas, httpcore_binaries, httpcore_hiddenimports = collect_all('httpcore')
 
@@ -100,6 +99,8 @@ a = Analysis(
         'master.app.components.stat_card',
         'common.protocol',
         'common.models',
+        'common.app_version',
+        'common_app_version',
         'psutil',
         'httpx',
         'certifi',
