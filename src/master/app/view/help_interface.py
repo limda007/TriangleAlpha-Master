@@ -54,9 +54,9 @@ _STEPS: list[dict[str, object]] = [
         "desc": (
             "在每台挂机虚拟机上执行以下操作：<br>"
             "① 将 <b>TriangleAlpha-Slave.exe</b> 放入脚本同目录<br>"
-            "② 先运行一次 <b>TriangleAlpha-Slave.exe</b>，自动生成 <b>SlaveClientConsole.exe</b><br>"
+            "② 只运行 <b>TriangleAlpha-Slave.exe</b>，程序会自动准备 <b>SlaveClientConsole.exe</b> 兼容占位文件<br>"
             "③ 新建 <b>主控IP.txt</b>，写入主控机器的 IP 地址<br>"
-            "④ 双击运行 Slave，节点会自动出现在主控"
+            "④ 后续始终双击 <b>TriangleAlpha-Slave.exe</b>，节点会自动出现在主控"
         ),
     },
     {
@@ -134,8 +134,8 @@ _FAQ_DATA: list[dict[str, str]] = [
     {
         "q": "节点显示「在线」但脚本不启动",
         "a": (
-            "① 先运行一次 <b>TriangleAlpha-Slave.exe</b><br>"
-            "　　程序会自动生成/修复 <b>SlaveClientConsole.exe</b><br><br>"
+            "① 只运行 <b>TriangleAlpha-Slave.exe</b><br>"
+            "　　<b>SlaveClientConsole.exe</b> 只是自动生成的兼容占位文件，不要手动双击<br><br>"
             "② 检查 TestDemo 脚本本身是否正常<br><br>"
             "③ 尝试在节点上 <b>右键 → 启动/重启脚本</b>"
         ),

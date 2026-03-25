@@ -496,7 +496,29 @@ class TestH11SlaveSingleInstance:
         captured = capsys.readouterr()
         assert "SlaveBackend" in captured.out
 
-    def test_ensure_console_placeholder_copies_current_executable(self, tmp_path):
+    def test_ensure_console_placeholder_prefers_small_stub(self, tmp_path):
+        from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"fake-exe")
+        placeholder_path = tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
+
+        def _fake_build(path):
+            path.write_bytes(b"MZstub")
+            return True
+
+        with (
+            patch("slave.main.os.name", "nt"),
+            patch("slave.main.sys.frozen", True, create=True),
+            patch("slave.main._build_console_placeholder_stub", side_effect=_fake_build),
+        ):
+            placeholder = _ensure_console_placeholder(exe_path)
+
+        assert placeholder == placeholder_path
+        assert placeholder is not None
+        assert placeholder.read_bytes() == b"MZstub"
+
+    def test_ensure_console_placeholder_copies_current_executable_when_stub_build_fails(self, tmp_path):
         from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
 
         exe_path = tmp_path / "TriangleAlpha-Slave.exe"
@@ -505,12 +527,33 @@ class TestH11SlaveSingleInstance:
         with (
             patch("slave.main.os.name", "nt"),
             patch("slave.main.sys.frozen", True, create=True),
+            patch("slave.main._build_console_placeholder_stub", return_value=False),
         ):
             placeholder = _ensure_console_placeholder(exe_path)
 
         assert placeholder == tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
         assert placeholder is not None
         assert placeholder.read_bytes() == b"fake-exe"
+
+    def test_ensure_console_placeholder_keeps_existing_small_stub(self, tmp_path):
+        from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"x" * (2 * 1024 * 1024))
+        placeholder_path = tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
+        placeholder_path.write_bytes(b"MZtiny")
+
+        with (
+            patch("slave.main.os.name", "nt"),
+            patch("slave.main.sys.frozen", True, create=True),
+            patch("slave.main._build_console_placeholder_stub") as mock_build,
+        ):
+            placeholder = _ensure_console_placeholder(exe_path)
+
+        assert placeholder == placeholder_path
+        assert placeholder is not None
+        assert placeholder.read_bytes() == b"MZtiny"
+        mock_build.assert_not_called()
 
     def test_run_console_placeholder_waits_until_parent_exits(self):
         from slave.main import _run_console_placeholder

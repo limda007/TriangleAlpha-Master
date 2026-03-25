@@ -11,7 +11,7 @@
 
 ## Q2: 节点显示「在线」但脚本不启动？
 
-1. 确认先运行过一次 `TriangleAlpha-Slave.exe`，程序会自动修复/生成 `SlaveClientConsole.exe`
+1. 只运行 `TriangleAlpha-Slave.exe`；`SlaveClientConsole.exe` 是自动生成的兼容占位文件，不要手动双击
 2. 检查 TestDemo 脚本是否正常
 3. 尝试右键该节点 → 启动/重启脚本
 

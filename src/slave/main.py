@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -22,6 +23,65 @@ logger = get_logger(__name__)
 SLAVE_CLIENT_CONSOLE_FILENAME = "SlaveClientConsole.exe"
 _CONSOLE_PLACEHOLDER_POLL_SEC = 2.0
 _CONSOLE_PLACEHOLDER_MAX_WAIT_SEC = 12 * 60 * 60
+_CONSOLE_PLACEHOLDER_MAX_SIZE = 1024 * 1024
+_CSC_CANDIDATE_PATHS = (
+    Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+    Path(r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"),
+)
+_CONSOLE_PLACEHOLDER_SOURCE = r"""
+using System;
+using System.Diagnostics;
+using System.Management;
+
+internal static class Program
+{
+    private const int MaxWaitMs = 12 * 60 * 60 * 1000;
+
+    private static int Main(string[] args)
+    {
+        try
+        {
+            int? parentPid = GetParentProcessId();
+            if (parentPid.HasValue)
+            {
+                try
+                {
+                    using (Process parent = Process.GetProcessById(parentPid.Value))
+                    {
+                        parent.WaitForExit(MaxWaitMs);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return 0;
+    }
+
+    private static int? GetParentProcessId()
+    {
+        string query = "win32_process.handle='"
+            + Process.GetCurrentProcess().Id
+            + "'";
+        using (ManagementObject current = new ManagementObject(query))
+        {
+            current.Get();
+            object raw = current["ParentProcessId"];
+            if (raw == null)
+            {
+                return null;
+            }
+
+            return Convert.ToInt32(raw);
+        }
+    }
+}
+"""
 
 
 def _get_base_dir() -> Path:
@@ -103,8 +163,64 @@ def _is_console_placeholder_mode(executable_path: Path | None = None) -> bool:
     return path is not None and path.name.lower() == SLAVE_CLIENT_CONSOLE_FILENAME.lower()
 
 
+def _find_csc() -> str | None:
+    csc_path = shutil.which("csc")
+    if csc_path:
+        return csc_path
+    for candidate in _CSC_CANDIDATE_PATHS:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _is_small_console_placeholder(placeholder_path: Path) -> bool:
+    try:
+        if placeholder_path.stat().st_size > _CONSOLE_PLACEHOLDER_MAX_SIZE:
+            return False
+        with placeholder_path.open("rb") as fh:
+            return fh.read(2) == b"MZ"
+    except OSError:
+        return False
+
+
+def _build_console_placeholder_stub(placeholder_path: Path) -> bool:
+    csc_path = _find_csc()
+    if csc_path is None:
+        return False
+
+    temp_path = placeholder_path.with_name(f"{placeholder_path.name}.tmp")
+    try:
+        with tempfile.TemporaryDirectory(prefix="trianglealpha-slave-stub-") as tmp_dir:
+            source_path = Path(tmp_dir) / "SlaveClientConsole.cs"
+            source_path.write_text(_CONSOLE_PLACEHOLDER_SOURCE, encoding="utf-8")
+            cmd = [
+                csc_path,
+                "/nologo",
+                "/target:exe",
+                "/optimize+",
+                "/platform:anycpu",
+                "/r:System.Management.dll",
+                f"/out:{temp_path}",
+                str(source_path),
+            ]
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        temp_path.replace(placeholder_path)
+    except (OSError, subprocess.CalledProcessError):
+        temp_path.unlink(missing_ok=True)
+        logger.exception("编译占位程序失败: %s", placeholder_path)
+        return False
+
+    logger.info("占位程序已编译: %s", placeholder_path)
+    return True
+
+
 def _ensure_console_placeholder(current_executable: Path | None = None) -> Path | None:
-    """将当前 slave 可执行文件复制为 TestDemo 需要的占位程序。"""
+    """确保 TestDemo 兼容占位程序存在，优先生成小 stub，失败时回退复制。"""
     if os.name != "nt" or not getattr(sys, "frozen", False):
         return None
     source_path = current_executable if current_executable is not None else _current_executable_path()
@@ -112,6 +228,12 @@ def _ensure_console_placeholder(current_executable: Path | None = None) -> Path 
         return None
 
     placeholder_path = source_path.parent / SLAVE_CLIENT_CONSOLE_FILENAME
+    if _is_small_console_placeholder(placeholder_path):
+        return placeholder_path
+
+    if _build_console_placeholder_stub(placeholder_path):
+        return placeholder_path
+
     temp_path = placeholder_path.with_suffix(f"{placeholder_path.suffix}.tmp")
     try:
         shutil.copy2(source_path, temp_path)

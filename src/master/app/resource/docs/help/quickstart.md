@@ -11,9 +11,9 @@
 在每台挂机虚拟机上：
 
 1. 将 `TriangleAlpha-Slave.exe` 放入 TestDemo 脚本同目录
-2. 先运行一次 `TriangleAlpha-Slave.exe`，程序会自动生成/修复 `SlaveClientConsole.exe`
+2. 只需运行 `TriangleAlpha-Slave.exe`，程序会在后台自动准备 `SlaveClientConsole.exe` 兼容占位文件
 3. 在同目录创建 `主控IP.txt`，写入主控机器的 IP 地址
-4. 运行 `TriangleAlpha-Slave.exe`
+4. 后续始终只运行 `TriangleAlpha-Slave.exe`，不要手动双击 `SlaveClientConsole.exe`
 
 被控端启动后会自动连接主控，在大屏模式的节点表格中出现。
 
