@@ -6,6 +6,7 @@ import base64
 import binascii
 import os
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -58,6 +59,26 @@ class CommandHandler:
             logger.warning("拒绝路径遍历: %s", filename)
             return None
         return fpath
+
+    def _replace_binary_file(self, target: Path, raw: bytes) -> None:
+        """通过临时文件原子替换目标，避免覆盖写保留旧文件的 ADS/MOTW。"""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f"{target.name}.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "wb") as temp_file:
+                temp_file.write(raw)
+            os.replace(temp_path, target)
+        except Exception:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("清理临时更新文件失败: %s", temp_path)
+            raise
 
     async def run(self) -> None:
         max_retries = 5
@@ -237,9 +258,13 @@ class CommandHandler:
         if content.startswith("BASE64:"):
             try:
                 raw = base64.b64decode(content[7:])
-                fpath.write_bytes(raw)
             except Exception:
                 logger.exception("BASE64 解码失败: %s", filename)
+                return ""
+            try:
+                self._replace_binary_file(fpath, raw)
+            except Exception:
+                logger.exception("二进制文件写入失败: %s", filename)
                 return ""
         else:
             content = content.strip()

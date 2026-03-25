@@ -77,6 +77,21 @@ class TestC5SetConfigPathGuard:
         assert desc == "文件已更新: configs/custom.bin"
         assert target.read_bytes() == b"hello"
 
+    def test_binary_update_replaces_existing_file_instead_of_in_place_write(self, tmp_path):
+        handler = self._handler(tmp_path)
+        target = tmp_path / "TestDemo.exe"
+        target.write_bytes(b"old")
+        payload = "TestDemo.exe|BASE64:" + base64.b64encode(b"new-binary").decode("ascii")
+
+        with patch("slave.command_handler.os.replace") as mock_replace:
+            desc = handler._handle_set_config(ParsedTcpCommand(TcpCommand.EXT_SET_CONFIG, payload))
+
+        assert desc == "文件已更新: TestDemo.exe"
+        mock_replace.assert_called_once()
+        src_arg, dst_arg = mock_replace.call_args.args
+        assert Path(dst_arg) == target
+        assert Path(src_arg).parent == tmp_path
+
     def test_rejects_traversal_even_without_whitelist(self, tmp_path):
         handler = self._handler(tmp_path)
         payload = "../OtherConsole.exe|BASE64:" + base64.b64encode(b"fake-exe").decode("ascii")
