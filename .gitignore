@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Local tooling
+.omc/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+build/
+dist/
+
+# Local runtime database
+accounts.db
+accounts.db-shm
+accounts.db-wal
