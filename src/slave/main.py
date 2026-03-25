@@ -196,7 +196,7 @@ def _build_console_placeholder_stub(placeholder_path: Path) -> bool:
             cmd = [
                 csc_path,
                 "/nologo",
-                "/target:exe",
+                "/target:winexe",
                 "/optimize+",
                 "/platform:anycpu",
                 "/r:System.Management.dll",
