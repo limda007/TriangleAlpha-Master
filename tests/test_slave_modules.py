@@ -50,6 +50,12 @@ class TestHeartbeatService:
 
         svc._send_udp.assert_called_once_with(build_udp_need_account(svc.machine_name))
 
+    def test_need_kami_api_removed(self):
+        svc = HeartbeatService()
+        assert not hasattr(svc, "send_need_kami")
+        assert not hasattr(svc, "check_kami_on_start")
+        assert not hasattr(svc, "check_kami_periodic")
+
     def test_stop_sets_running_false(self):
         svc = HeartbeatService()
         svc._running = True

@@ -11,6 +11,7 @@ import pytest
 from common.models import PLATFORM_ACCOUNT_HEADER, AccountInfo, AccountStatus, NodeInfo
 from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, GameState, TcpCommand
 from master.app.core.account_db import AccountDB
+from master.app.core.kami_db import KamiDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.platform_syncer import PlatformSyncer
 
@@ -210,6 +211,50 @@ class TestM2SignalBusDeleted:
     def test_file_not_exists(self):
         path = Path(__file__).parent.parent / "src" / "master" / "app" / "common" / "signal_bus.py"
         assert not path.exists(), f"signal_bus.py 应已删除: {path}"
+
+
+class TestKamiManualOnly:
+    """验证卡密改为仅手动分配。"""
+
+    def test_node_manager_need_kami_signal_removed(self):
+        nm = NodeManager()
+        assert not hasattr(nm, "need_kami")
+
+    def test_main_window_auto_kami_hooks_removed(self):
+        from master.app.view.main_window import MainWindow
+
+        assert not hasattr(MainWindow, "_autoAssignKami")
+        assert not hasattr(MainWindow, "_onNeedKami")
+
+
+class TestKamiBindingGuards:
+    """验证手动分配路径的卡密绑定保护。"""
+
+    def test_bind_node_rejects_second_kami_for_same_node(self, tmp_path):
+        db = KamiDB(tmp_path / "kami.db")
+        db.upsert_kamis([
+            {"kami": "KAMI-001", "ok": True, "status": "已激活", "device_count": "0/1"},
+            {"kami": "KAMI-002", "ok": True, "status": "已激活", "device_count": "0/1"},
+        ])
+        kamis = db.get_all_kamis()
+
+        assert db.bind_node(kamis[0].id, "VM-01") is True
+        assert db.bind_node(kamis[1].id, "VM-01") is False
+        current = db.get_kami_for_node("VM-01")
+        assert current is not None
+        assert current.kami_code == "KAMI-001"
+        db.close()
+
+    def test_bind_node_rejects_full_kami(self, tmp_path):
+        db = KamiDB(tmp_path / "kami.db")
+        db.upsert_kamis([
+            {"kami": "KAMI-FULL", "ok": True, "status": "已激活", "device_count": "1/1"},
+        ])
+        kami = db.get_all_kamis()[0]
+
+        assert db.bind_node(kami.id, "VM-01") is False
+        assert db.get_kami_for_node("VM-01") is None
+        db.close()
 
 
 # ── M7: 导出时间戳 ──

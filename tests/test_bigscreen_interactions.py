@@ -8,6 +8,7 @@ from typing import cast
 from unittest.mock import MagicMock, call
 
 import pytest
+from PyQt6.QtCore import QItemSelectionModel
 from PyQt6.QtWidgets import QApplication, QHeaderView, QWidget
 
 from common.models import NodeInfo
@@ -74,6 +75,53 @@ def test_file_page_does_not_create_export_all_button(bigscreen) -> None:
     widget, _node_manager, _commander, _account_db = bigscreen
 
     assert widget.findChild(QWidget, "btnExportAll") is None
+    assert widget.findChild(QWidget, "btnBatchKami") is None
+
+
+def test_context_menu_prefers_selected_rows(bigscreen, qapp: QApplication) -> None:
+    widget, node_manager, _commander, _account_db = bigscreen
+    node_manager.nodes["VM-01"] = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    node_manager.nodes["VM-02"] = NodeInfo(machine_name="VM-02", ip="10.0.0.2")
+    node_manager.nodes["VM-03"] = NodeInfo(machine_name="VM-03", ip="10.0.0.3")
+    widget._refreshNodeTable()
+
+    selection_model = widget.table.selectionModel()
+    assert selection_model is not None
+    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+    selection_model.select(widget.table.model().index(0, 0), flags)
+    selection_model.select(widget.table.model().index(1, 0), flags)
+    qapp.processEvents()
+
+    nodes, selected = widget._getContextMenuNodes(2)
+    assert selected is True
+    assert [node.machine_name for node in nodes] == ["VM-01", "VM-02"]
+
+    selection_model.clearSelection()
+    qapp.processEvents()
+    nodes, selected = widget._getContextMenuNodes(2)
+    assert selected is False
+    assert [node.machine_name for node in nodes] == ["VM-03"]
+
+
+def test_send_cmd_to_nodes_broadcasts_selected_nodes(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widget, node_manager, commander, _account_db = bigscreen
+    node1 = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    node2 = NodeInfo(machine_name="VM-02", ip="10.0.0.2")
+    node_manager.nodes["VM-01"] = node1
+    node_manager.nodes["VM-02"] = node2
+
+    broadcast_mock = MagicMock()
+    success_mock = MagicMock()
+    monkeypatch.setattr(commander, "broadcast", broadcast_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", success_mock)
+
+    widget._sendCmdToNodes([node1, node2], TcpCommand.START_EXE, "启动脚本")
+
+    broadcast_mock.assert_called_once_with(["10.0.0.1", "10.0.0.2"], TcpCommand.START_EXE)
+    success_mock.assert_called_once()
 
 
 def test_account_panel_refresh_only_loads_idle_accounts(bigscreen) -> None:

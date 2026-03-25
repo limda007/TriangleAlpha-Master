@@ -51,6 +51,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
+from common.models import NodeInfo
 from common.protocol import (
     ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
     SLAVE_SELF_UPDATE_FILENAME,
@@ -544,7 +545,6 @@ class BigScreenInterface(ScrollArea):
             ("提取账号", FIF.COMPLETED, "btnExtract"),
             ("批量删除文件", FIF.DELETE, "btnDeleteFile"),
             ("清理单机账号", FIF.REMOVE, "btnCleanAccounts"),
-            ("一键分配卡密", FIF.CERTIFICATE, "btnBatchKami"),
         ]
         for text, icon, obj_name in _FILE_BUTTONS:
             btn = PushButton(icon, text, filePage)
@@ -575,7 +575,7 @@ class BigScreenInterface(ScrollArea):
         self._actionStack.setCurrentWidget(opPage)
         self._actionPivot.setCurrentItem("opPage")
 
-        # 连接按钮信号（操作: 0-3, 文件: 4-7）
+        # 连接按钮信号（操作: 0-3, 文件: 4-6）
         self._actionBtns[0].clicked.connect(self._oneClickStart)
         self._actionBtns[1].clicked.connect(self._startExeOnAll)
         self._actionBtns[2].clicked.connect(self._stopExeOnAll)
@@ -583,7 +583,6 @@ class BigScreenInterface(ScrollArea):
         self._actionBtns[4].clicked.connect(self._extractCompleted)
         self._actionBtns[5].clicked.connect(self._deleteFileOnAll)
         self._actionBtns[6].clicked.connect(self._cleanStandaloneAccounts)
-        self._actionBtns[7].clicked.connect(self._batchAssignKami)
 
         return panel
 
@@ -1381,39 +1380,49 @@ class BigScreenInterface(ScrollArea):
         row = self.table.rowAt(pos.y())
         if row < 0:
             return
-        name_item = self.table.item(row, 1)
-        ip_item = self.table.item(row, 2)
-        if not name_item or not ip_item:
+        target_nodes, from_selection = self._getContextMenuNodes(row)
+        if not target_nodes:
             return
-        machine_name = name_item.text()
-        ip = ip_item.text()
-        node = self._nm.nodes.get(machine_name)
+        online_nodes = [node for node in target_nodes if node.status not in ("离线", "断连")]
+        count = len(target_nodes)
+        copy_ip_label = f"复制选中 IP ({count})" if from_selection else "复制 IP"
+        copy_name_label = f"复制选中机器名 ({count})" if from_selection else "复制机器名"
 
         menu = RoundMenu(parent=self.table)
         # 复制操作
-        menu.addAction(Action(FIF.COPY, "复制 IP", triggered=lambda: self._copyText(ip)))
         menu.addAction(
-            Action(FIF.COPY, "复制机器名", triggered=lambda: self._copyText(machine_name))
+            Action(
+                FIF.COPY,
+                copy_ip_label,
+                triggered=lambda nodes=target_nodes: self._copyNodeIPs(nodes),
+            )
+        )
+        menu.addAction(
+            Action(
+                FIF.COPY,
+                copy_name_label,
+                triggered=lambda nodes=target_nodes: self._copyNodeNames(nodes),
+            )
         )
         menu.addSeparator()
 
-        # 单节点命令（仅在线）
-        if node and node.status not in ("离线", "断连"):
+        if online_nodes:
+            scope_suffix = f" ({len(online_nodes)} 节点)" if from_selection else ""
             menu.addAction(
                 Action(
                     FIF.PLAY_SOLID,
-                    "启动/重启脚本",
-                    triggered=lambda: self._singleNodeCmd(
-                        ip, TcpCommand.START_EXE, "启动脚本"
+                    f"启动/重启脚本{scope_suffix}",
+                    triggered=lambda nodes=online_nodes: self._sendCmdToNodes(
+                        nodes, TcpCommand.START_EXE, "启动脚本"
                     ),
                 )
             )
             menu.addAction(
                 Action(
                     FIF.CLOSE,
-                    "停止脚本游戏",
-                    triggered=lambda: self._singleNodeCmd(
-                        ip, TcpCommand.STOP_EXE, "停止脚本"
+                    f"停止脚本游戏{scope_suffix}",
+                    triggered=lambda nodes=online_nodes: self._sendCmdToNodes(
+                        nodes, TcpCommand.STOP_EXE, "停止脚本"
                     ),
                 )
             )
@@ -1421,27 +1430,39 @@ class BigScreenInterface(ScrollArea):
             menu.addAction(
                 Action(
                     FIF.POWER_BUTTON,
-                    "重启电脑",
-                    triggered=lambda: self._singleNodeReboot(ip, machine_name),
+                    f"重启电脑{scope_suffix}",
+                    triggered=lambda nodes=online_nodes: self._rebootNodes(nodes),
                 )
             )
             menu.addSeparator()
-            # 账号绑定操作
-            bound = self._pool.get_account_for_machine(machine_name)
-            if bound:
+            bound_nodes = [
+                node for node in online_nodes if self._pool.get_account_for_machine(node.machine_name)
+            ]
+            unbound_nodes = [
+                node for node in online_nodes if not self._pool.get_account_for_machine(node.machine_name)
+            ]
+            if bound_nodes:
+                label = (
+                    f"释放绑定账号 ({len(bound_nodes)})"
+                    if from_selection or len(bound_nodes) > 1 else "释放绑定账号"
+                )
                 menu.addAction(
                     Action(
                         FIF.REMOVE,
-                        "释放绑定账号",
-                        triggered=lambda: self._releaseNodeAccount(machine_name),
+                        label,
+                        triggered=lambda nodes=bound_nodes: self._releaseNodeAccounts(nodes),
                     )
                 )
-            else:
+            if unbound_nodes:
+                label = (
+                    f"分配账号 ({len(unbound_nodes)})"
+                    if from_selection or len(unbound_nodes) > 1 else "分配账号"
+                )
                 menu.addAction(
                     Action(
                         FIF.ADD,
-                        "分配账号",
-                        triggered=lambda: self._allocateNodeAccount(machine_name, ip),
+                        label,
+                        triggered=lambda nodes=unbound_nodes: self._allocateNodeAccounts(nodes),
                     )
                 )
 
@@ -1449,35 +1470,21 @@ class BigScreenInterface(ScrollArea):
             menu.addAction(
                 Action(
                     FIF.TAG,
-                    "设置分组",
-                    triggered=lambda: self._setNodeGroup(ip, machine_name),
+                    f"设置分组{scope_suffix}",
+                    triggered=lambda nodes=online_nodes: self._setNodeGroupForNodes(nodes),
                 )
             )
 
             # 卡密操作
             if self._kami_db:
                 menu.addSeparator()
-                selected_rows = self.table.selectionModel().selectedRows()
-                if len(selected_rows) > 1:
-                    # 多选 → 批量分配
-                    menu.addAction(
-                        Action(
-                            FIF.LABEL,
-                            f"批量分配卡密 ({len(selected_rows)} 节点)",
-                            triggered=self._batchAssignKamiFromSelection,
-                        )
+                menu.addAction(
+                    Action(
+                        FIF.LABEL,
+                        f"分配/重发卡密{scope_suffix}",
+                        triggered=lambda nodes=online_nodes: self._assignKamiToNodes(nodes),
                     )
-                else:
-                    # 单选 → 仅当未绑定时显示
-                    bound_kami = self._kami_db.get_kami_for_node(machine_name)
-                    if not bound_kami:
-                        menu.addAction(
-                            Action(
-                                FIF.LABEL,
-                                "分配卡密",
-                                triggered=lambda: self._assignNodeKami(machine_name, ip),
-                            )
-                        )
+                )
 
         # 底部面板显隐
         menu.addSeparator()
@@ -1497,6 +1504,30 @@ class BigScreenInterface(ScrollArea):
             "已复制", text,
             parent=self, position=InfoBarPosition.TOP, duration=1500,
         )
+
+    def _getContextMenuNodes(self, row: int) -> tuple[list[NodeInfo], bool]:
+        """右键菜单目标：有 selection 用 selection，无 selection 用点击行。"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        rows = [idx.row() for idx in selected_rows] if selected_rows else [row]
+        nodes: list[NodeInfo] = []
+        for target_row in rows:
+            item = self.table.item(target_row, 1)
+            if not item:
+                continue
+            node = self._nm.nodes.get(item.text())
+            if node is not None:
+                nodes.append(node)
+        return nodes, bool(selected_rows)
+
+    def _copyNodeIPs(self, nodes: list[NodeInfo]) -> None:
+        text = "\n".join(node.ip for node in nodes if node.ip)
+        if text:
+            self._copyText(text)
+
+    def _copyNodeNames(self, nodes: list[NodeInfo]) -> None:
+        text = "\n".join(node.machine_name for node in nodes if node.machine_name)
+        if text:
+            self._copyText(text)
 
     def _toggleBottomPanel(self) -> None:
         """切换底部面板显隐"""
@@ -1554,9 +1585,42 @@ class BigScreenInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
+    def _setNodeGroupForNodes(self, nodes: list[NodeInfo]) -> None:
+        """为一个或多个节点设置分组。"""
+        if not nodes:
+            return
+        if len(nodes) == 1:
+            node = nodes[0]
+            self._setNodeGroup(node.ip, node.machine_name)
+            return
+        dlg = MessageBox("设置分组", f"为选中的 {len(nodes)} 个节点设置分组名称", self.window())
+        edit = PlainTextEdit(dlg)
+        edit.setPlaceholderText("输入分组名...")
+        edit.setMaximumHeight(40)
+        dlg.textLayout.addWidget(edit)
+        dlg.yesButton.setText("确认")
+        if not dlg.exec():
+            return
+        group = edit.toPlainText().strip()
+        if not group:
+            return
+        self._tcp.broadcast([node.ip for node in nodes], TcpCommand.EXT_SET_GROUP, group)
+        InfoBar.success(
+            "已设置", f"{len(nodes)} 个节点 → 分组 '{group}'",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
     def _assignNodeKami(self, machine_name: str, ip: str) -> None:
         """手动为节点分配卡密"""
         if not self._kami_db:
+            return
+        existing = self._kami_db.get_kami_for_node(machine_name)
+        if existing:
+            self._tcp.send(ip, TcpCommand.PUSH_KAMI, existing.kami_code)
+            InfoBar.success(
+                "已重发", f"{machine_name} ← {existing.kami_code[:8]}…",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
             return
         kami = self._kami_db.find_available_kami()
         if kami is None:
@@ -1573,73 +1637,62 @@ class BigScreenInterface(ScrollArea):
             )
         else:
             InfoBar.warning(
-                "分配失败", "该节点可能已绑定此卡密",
+                "分配失败", "节点已有卡密绑定，或该卡密设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
             )
 
-    def _batchAssignKami(self) -> None:
-        """批量为选中/全部在线节点分配卡密，已绑定的跳过"""
-        if not self._kami_db:
+    def _assignKamiToNodes(self, nodes: list[NodeInfo]) -> None:
+        """按节点列表分配或重发卡密。"""
+        if not self._kami_db or not nodes:
             return
-        nodes, is_sel = self._getSelectedOnlineNodes()
-        if not nodes:
-            InfoBar.warning(
-                "提示", "没有在线节点",
-                parent=self, position=InfoBarPosition.TOP, duration=2000,
-            )
+        if len(nodes) == 1:
+            node = nodes[0]
+            self._assignNodeKami(node.machine_name, node.ip)
             return
-        assigned, skipped = self._doBatchAssignKami(nodes)
-        scope = "选中" if is_sel else "全部在线"
-        msg = f"{scope}节点: 分配 {assigned} 个, 跳过 {skipped} 个(已绑定)"
-        InfoBar.success(
-            "批量分配完成", msg,
-            parent=self, position=InfoBarPosition.TOP, duration=3000,
-        )
-
-    def _batchAssignKamiFromSelection(self) -> None:
-        """右键菜单: 为选中行的在线节点批量分配卡密"""
-        if not self._kami_db:
-            return
-        selected_rows = self.table.selectionModel().selectedRows()
-        nodes = []
-        for idx in selected_rows:
-            item = self.table.item(idx.row(), 1)
-            if not item:
-                continue
-            node = self._nm.nodes.get(item.text())
-            if node and node.status not in ("离线", "断连"):
-                nodes.append(node)
-        if not nodes:
-            return
-        assigned, skipped = self._doBatchAssignKami(nodes)
-        msg = f"选中 {len(nodes)} 节点: 分配 {assigned} 个, 跳过 {skipped} 个(已绑定)"
-        InfoBar.success(
-            "批量分配完成", msg,
-            parent=self, position=InfoBarPosition.TOP, duration=3000,
-        )
-
-    def _doBatchAssignKami(self, nodes: list) -> tuple[int, int]:
-        """核心批量分配逻辑，返回 (assigned, skipped)"""
         assigned = 0
-        skipped = 0
+        resent = 0
+        failed = 0
         for node in nodes:
             existing = self._kami_db.get_kami_for_node(node.machine_name)
             if existing:
-                skipped += 1
+                self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, existing.kami_code)
+                resent += 1
                 continue
             kami = self._kami_db.find_available_kami()
             if kami is None:
-                break
+                failed += 1
+                continue
             if self._kami_db.bind_node(kami.id, node.machine_name):
                 self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
                 assigned += 1
-        return assigned, skipped
+            else:
+                failed += 1
+        InfoBar.success(
+            "卡密处理完成",
+            f"选中 {len(nodes)} 节点: 新分配 {assigned} 个, 重发 {resent} 个, 失败 {failed} 个",
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
 
     def _singleNodeCmd(self, ip: str, cmd: TcpCommand, label: str) -> None:
         """单节点发送命令"""
         self._tcp.send(ip, cmd)
         InfoBar.success(
             "已发送", f"{label}指令 → {ip}",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
+    def _sendCmdToNodes(self, nodes: list[NodeInfo], cmd: TcpCommand, label: str) -> None:
+        """对一个或多个节点发送命令。"""
+        if not nodes:
+            return
+        if len(nodes) == 1:
+            self._singleNodeCmd(nodes[0].ip, cmd, label)
+            return
+        ips = [node.ip for node in nodes]
+        self._tcp.broadcast(ips, cmd)
+        self._nm.add_history(label, f"{len(nodes)} 个选中节点")
+        InfoBar.success(
+            "已发送", f"{label}指令已发送到 {len(nodes)} 个选中节点",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
@@ -1656,6 +1709,25 @@ class BigScreenInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
+    def _rebootNodes(self, nodes: list[NodeInfo]) -> None:
+        """对一个或多个节点执行重启。"""
+        if not nodes:
+            return
+        if len(nodes) == 1:
+            node = nodes[0]
+            self._singleNodeReboot(node.ip, node.machine_name)
+            return
+        if not self._confirmDangerous(
+            "重启电脑", f"即将强制重启 {len(nodes)} 个选中节点，所有未保存数据将丢失"
+        ):
+            return
+        self._tcp.broadcast([node.ip for node in nodes], TcpCommand.REBOOT_PC)
+        self._nm.add_history("重启电脑", f"{len(nodes)} 个选中节点")
+        InfoBar.success(
+            "已发送", f"重启指令已发送到 {len(nodes)} 个选中节点",
+            parent=self, position=InfoBarPosition.TOP, duration=2000,
+        )
+
     def _releaseNodeAccount(self, machine_name: str) -> None:
         """释放节点绑定的账号"""
         self._pool.release(machine_name)
@@ -1663,6 +1735,24 @@ class BigScreenInterface(ScrollArea):
             "已释放", f"{machine_name} 绑定账号已释放",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
+
+    def _releaseNodeAccounts(self, nodes: list[NodeInfo]) -> None:
+        """批量释放节点绑定账号。"""
+        if not nodes:
+            return
+        if len(nodes) == 1:
+            self._releaseNodeAccount(nodes[0].machine_name)
+            return
+        released = 0
+        for node in nodes:
+            if self._pool.get_account_for_machine(node.machine_name):
+                self._pool.release(node.machine_name)
+                released += 1
+        if released:
+            InfoBar.success(
+                "已释放", f"已释放 {released} 个节点的绑定账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
 
     def _allocateNodeAccount(self, machine_name: str, ip: str) -> None:
         """为单节点分配账号"""
@@ -1678,6 +1768,32 @@ class BigScreenInterface(ScrollArea):
             "已分配", f"{machine_name} ← {acc.username}",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
+
+    def _allocateNodeAccounts(self, nodes: list[NodeInfo]) -> None:
+        """批量为节点分配账号。"""
+        if not nodes:
+            return
+        if len(nodes) == 1:
+            node = nodes[0]
+            self._allocateNodeAccount(node.machine_name, node.ip)
+            return
+        assigned = 0
+        for node in nodes:
+            acc = self._pool.allocate(node.machine_name)
+            if acc is None:
+                continue
+            self._tcp.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+            assigned += 1
+        if assigned:
+            InfoBar.success(
+                "已分配", f"已向 {assigned} 个选中节点下发账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+        else:
+            InfoBar.warning(
+                "提示", "没有可分配的空闲账号",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
 
     # ──────────────────────────────────────────────────────
     # 超时监控

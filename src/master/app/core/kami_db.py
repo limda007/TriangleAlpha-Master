@@ -181,6 +181,22 @@ class KamiDB(QObject):
 
     def bind_node(self, kami_id: int, node_name: str) -> bool:
         """绑定卡密到节点，返回是否成功"""
+        existing = self._conn.execute(
+            "SELECT kami_id FROM kami_bindings WHERE node_name=? LIMIT 1",
+            (node_name,),
+        ).fetchone()
+        if existing:
+            return int(existing["kami_id"]) == kami_id
+
+        kami_row = self._conn.execute(
+            "SELECT device_used, device_total FROM kamis WHERE id=? LIMIT 1",
+            (kami_id,),
+        ).fetchone()
+        if kami_row is None:
+            return False
+        if int(kami_row["device_total"]) <= int(kami_row["device_used"]):
+            return False
+
         try:
             self._conn.execute(
                 "INSERT INTO kami_bindings (kami_id, node_name) VALUES (?, ?)",

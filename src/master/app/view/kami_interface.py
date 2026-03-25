@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
+from typing import Protocol, cast
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -33,6 +33,7 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import FluentIcon as FIF
 
+from common.protocol import TcpCommand
 from master.app.components.stat_card import StatCard
 from master.app.core.kami_client import KamiQueryWorker
 from master.app.core.kami_db import KamiDB
@@ -48,17 +49,23 @@ _STATUS_COLORS: dict[str, tuple[str, str]] = {
 }
 
 
+class _TcpSender(Protocol):
+    def send(self, ip: str, cmd: TcpCommand, payload: str = "") -> None: ...
+
+
 class KamiInterface(ScrollArea):
     def __init__(
         self,
         kami_db: KamiDB,
         node_manager: object,
+        tcp_commander: _TcpSender | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.setObjectName("kamiInterface")
         self._kami_db = kami_db
         self._node_manager = node_manager
+        self._tcp = tcp_commander
         self._worker: KamiQueryWorker | None = None
 
         self.view = QWidget(self)
@@ -404,13 +411,14 @@ class KamiInterface(ScrollArea):
             return
         node_name = combo.currentText()
         if self._kami_db.bind_node(kami_id, node_name):
+            self._pushKamiToNode(kami_id, node_name)
             InfoBar.success(
                 "分配成功", f"已分配到 {node_name}",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
         else:
             InfoBar.warning(
-                "分配失败", f"该卡密已绑定到 {node_name}",
+                "分配失败", "节点已有卡密绑定，或该卡密设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
 
@@ -452,6 +460,18 @@ class KamiInterface(ScrollArea):
         if item:
             return cast(int | None, item.data(Qt.ItemDataRole.UserRole))
         return None
+
+    def _pushKamiToNode(self, kami_id: int, node_name: str) -> None:
+        if self._tcp is None:
+            return
+        nodes = getattr(self._node_manager, "nodes", {})
+        node = nodes.get(node_name) if isinstance(nodes, dict) else None
+        if node is None or not getattr(node, "ip", ""):
+            return
+        kami = next((item for item in self._kami_db.get_all_kamis() if item.id == kami_id), None)
+        if kami is None:
+            return
+        self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
 
     def _getSelectedKamiIds(self) -> list[int]:
         ids = []

@@ -23,7 +23,6 @@ class NodeManager(QObject):
     node_status_reported = pyqtSignal(str)  # machine_name — 仅 STATUS 消息触发
     account_sync_received = pyqtSignal(str, object)  # (machine_name, list[dict]) — 账号同步
     need_account = pyqtSignal(str)  # machine_name — TestDemo 请求新账号
-    need_kami = pyqtSignal(str)     # machine_name — slave 请求卡密
     stats_changed = pyqtSignal()     # 统计数据变化
     history_changed = pyqtSignal()   # 操作历史变化 (M1)
 
@@ -58,8 +57,6 @@ class NodeManager(QObject):
                 self._handle_account_sync(msg)
             case UdpMessageType.NEED_ACCOUNT:
                 self.need_account.emit(msg.machine_name)
-            case UdpMessageType.NEED_KAMI:
-                self.need_kami.emit(msg.machine_name)
 
     def check_timeouts(self) -> None:
         """检查超时节点，标记离线 / 断连"""

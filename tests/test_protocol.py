@@ -51,6 +51,9 @@ class TestParseUdp:
     def test_parse_unknown_returns_none(self):
         assert parse_udp_message("GARBAGE|data") is None
 
+    def test_parse_need_kami_returns_none(self):
+        assert parse_udp_message("NEED_KAMI|VM-01") is None
+
 
 class TestBuildUdp:
     def test_build_online(self):

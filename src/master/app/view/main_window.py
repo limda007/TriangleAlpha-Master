@@ -61,7 +61,7 @@ class MainWindow(FluentWindow):
         )
         self.accountInterface = AccountInterface(self.accountPool, self)
         self.kamiInterface = KamiInterface(
-            self.kamiDB, self.nodeManager, self,
+            self.kamiDB, self.nodeManager, self.tcpCommander, self,
         )
         self.historyInterface = HistoryInterface(self.nodeManager, self)
         self.logInterface = LogInterface(self)
@@ -81,10 +81,6 @@ class MainWindow(FluentWindow):
 
         # 节点重连时自动重发绑定账号
         self.nodeManager.node_online.connect(self._onNodeReconnect)
-        # 节点上线时自动分配卡密（纯本地 SQLite 查询）
-        self.nodeManager.node_online.connect(self._autoAssignKami)
-        # slave 主动请求卡密
-        self.nodeManager.need_kami.connect(self._onNeedKami)
 
         # 节点上报时自动补全缺失的验证码 Key
         self._tokenPushedAt: dict[str, float] = {}  # machine_name → monotonic timestamp
@@ -360,28 +356,3 @@ class MainWindow(FluentWindow):
             ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
         )
         self._completed_cleanup_sent[machine_name] = cleanup_key
-
-    def _autoAssignKami(self, machine_name: str) -> None:
-        """节点上线时自动分配可用卡密（纯本地 SQLite 查询，不做 HTTP）"""
-        kami = self.kamiDB.find_available_kami()
-        if kami is None:
-            return
-        # 检查该节点是否已绑定此卡密
-        if machine_name in kami.bound_nodes:
-            return
-        self.kamiDB.bind_node(kami.id, machine_name)
-
-    def _onNeedKami(self, machine_name: str) -> None:
-        """slave 请求卡密 → 分配可用卡密并通过 TCP 下发到 kamis.txt"""
-        node = self.nodeManager.nodes.get(machine_name)
-        if not node:
-            return
-        kami = self.kamiDB.find_available_kami()
-        if kami is None:
-            return
-        if machine_name in kami.bound_nodes:
-            # 已绑定，直接重发
-            self.tcpCommander.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
-            return
-        if self.kamiDB.bind_node(kami.id, machine_name):
-            self.tcpCommander.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)

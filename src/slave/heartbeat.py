@@ -17,7 +17,6 @@ from common.protocol import (
     build_udp_account_sync,
     build_udp_ext_online,
     build_udp_need_account,
-    build_udp_need_kami,
     build_udp_offline,
     build_udp_status,
 )
@@ -78,29 +77,6 @@ class HeartbeatService:
         self._send_udp(msg)
         logger.info("已发送 NEED_ACCOUNT 请求")
 
-    def send_need_kami(self) -> None:
-        """发送 NEED_KAMI 请求到 master。"""
-        msg = build_udp_need_kami(self._machine_name)
-        self._send_udp(msg)
-        logger.info("已发送 NEED_KAMI 请求")
-
-    def check_kami_on_start(self) -> None:
-        """启动时检查本地 kamis.txt，没有或为空则请求卡密。"""
-        if not self._base_dir:
-            return
-        kami_file = self._base_dir / "kamis.txt"
-        if not kami_file.exists() or not kami_file.read_text(encoding="utf-8-sig").strip():
-            logger.info("本地 kamis.txt 不存在或为空，向 master 请求卡密")
-            self.send_need_kami()
-
-    def check_kami_periodic(self) -> None:
-        """心跳周期检查 kamis.txt，没有或为空则请求卡密。"""
-        if not self._base_dir:
-            return
-        kami_file = self._base_dir / "kamis.txt"
-        if not kami_file.exists() or not kami_file.read_text(encoding="utf-8-sig").strip():
-            self.send_need_kami()
-
     def _send_udp(self, msg: str) -> None:
         """通用 UDP 发送（独立阻塞 socket）。"""
         data = msg.encode("utf-8")
@@ -111,8 +87,6 @@ class HeartbeatService:
 
     async def run(self) -> None:
         self._running = True
-        # 启动时检查卡密
-        self.check_kami_on_start()
         # H2: 使用 with 管理 socket，CancelledError 时也能正确关闭
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -153,8 +127,6 @@ class HeartbeatService:
                         if self._on_sent:
                             self._on_sent(self._beat_count, cpu, mem)
                         consecutive_errors = 0
-                        # 每次心跳检查卡密
-                        self.check_kami_periodic()
                     except Exception as e:
                         consecutive_errors += 1
                         logger.warning("心跳发送失败 (连续第 %s 次): %s", consecutive_errors, e)
