@@ -365,6 +365,97 @@ class TestPlatformUploadBatching:
         finally:
             db.close()
 
+
+class TestPlatformRetryBackoff:
+    """验证平台同步的退避重试与漏补自检。"""
+
+    def test_worker_error_schedules_exponential_backoff(self, tmp_path) -> None:
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            syncer = PlatformSyncer(db)
+            syncer._enabled = True
+            syncer._api_url = "http://example.com"
+            syncer._backoff_timer.start = MagicMock()  # type: ignore[method-assign]
+
+            syncer._on_worker_error("请求失败：ReadTimeout")
+            syncer._on_worker_error("上传失败(429)：too many requests")
+
+            assert syncer._backoff_timer.start.call_args_list == [((20_000,), {}), ((40_000,), {})]
+            assert syncer._next_backoff_ms == 80_000
+        finally:
+            db.close()
+
+    def test_success_resets_backoff_window(self, tmp_path) -> None:
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            syncer = PlatformSyncer(db)
+            syncer._enabled = True
+            syncer._api_url = "http://example.com"
+            syncer._backoff_timer.start = MagicMock()  # type: ignore[method-assign]
+            syncer._backoff_timer.stop = MagicMock()  # type: ignore[method-assign]
+
+            syncer._on_worker_error("请求失败：ReadTimeout")
+            assert syncer._next_backoff_ms == 40_000
+
+            syncer._on_tokens_updated("at_ok", "rt_ok")
+
+            syncer._backoff_timer.stop.assert_called()
+            assert syncer._next_backoff_ms == 20_000
+        finally:
+            db.close()
+
+    def test_poll_empty_result_still_triggers_pending_upload_self_check(self, tmp_path, monkeypatch) -> None:
+        import master.app.core.platform_syncer as platform_syncer_module
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            db.import_fresh("u1----p1")
+            db._conn.execute(
+                "UPDATE accounts SET status='已完成', completed_at='2026-03-25 10:00:00'"
+            )
+            db._conn.commit()
+            db._refresh_counts()
+
+            _FakeSyncWorker.instances.clear()
+            monkeypatch.setattr(platform_syncer_module, "_SyncWorker", _FakeSyncWorker)
+            scheduled: list[Callable[[], None]] = []
+            monkeypatch.setattr(
+                platform_syncer_module.QTimer,
+                "singleShot",
+                staticmethod(lambda _ms, callback: scheduled.append(callback)),
+            )
+
+            syncer = PlatformSyncer(db)
+            syncer._enabled = True
+            syncer._api_url = "http://example.com"
+            syncer._group_name = "group-a"
+
+            poll_worker = _FakeSyncWorker(syncer._client, "poll")
+            syncer._worker = poll_worker  # type: ignore[assignment]
+
+            syncer._on_poll_done([])
+            syncer._cleanup_worker()
+
+            assert len(scheduled) == 1
+            callback = scheduled.pop()
+            callback()
+
+            assert _FakeSyncWorker.instances[-1].task == "upload"
+            assert _FakeSyncWorker.instances[-1].upload_usernames == ["u1"]
+        finally:
+            db.close()
+
+    def test_poll_username_field_is_supported(self) -> None:
+        from master.app.core.platform_syncer import _SyncWorker
+
+        result = _SyncWorker._extract_taken_usernames([
+            {"username": "u1", "status": "taken"},
+            {"steam_account": "u2", "status": "taken"},
+            {"username": "", "steam_account": ""},
+        ])
+
+        assert result == ["u1", "u2"]
+
     def test_pending_upload_resumes_after_other_worker_finishes(self, tmp_path, monkeypatch) -> None:
         import master.app.core.platform_syncer as platform_syncer_module
 

@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 _MAX_AUTH_FAILURES = 3
 _UPLOAD_BATCH_SIZE = 200
+_RETRY_BACKOFF_BASE_MS = 20_000
+_RETRY_BACKOFF_MAX_MS = 10 * 60_000
+_SELF_CHECK_BUSY_DELAY_MS = 5_000
 
 
 class _SyncWorker(QThread):
@@ -101,10 +104,27 @@ class _SyncWorker(QThread):
             self._client_cfg.access_token,
             self._client_cfg.refresh_token,
         )
-        taken = [item.get("steam_account", "") for item in items if item.get("steam_account")]
+        taken = self._extract_taken_usernames(items)
+        self.poll_done.emit(taken)
         if taken:
-            self.poll_done.emit(taken)
             logger.info("平台轮询：%d 个账号已被取号", len(taken))
+
+    @staticmethod
+    def _extract_taken_usernames(items: list[dict]) -> list[str]:
+        usernames: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            username = str(
+                item.get("steam_account")
+                or item.get("username")
+                or item.get("account")
+                or ""
+            ).strip()
+            if not username or username in seen:
+                continue
+            seen.add(username)
+            usernames.append(username)
+        return usernames
 
 
 class PlatformSyncer(QObject):
@@ -158,6 +178,12 @@ class PlatformSyncer(QObject):
         self._retry_timer.setInterval(120_000)
         self._retry_timer.timeout.connect(self.try_upload_completed)
 
+        # 错误退避重试 + 自检
+        self._next_backoff_ms = _RETRY_BACKOFF_BASE_MS
+        self._backoff_timer = QTimer(self)
+        self._backoff_timer.setSingleShot(True)
+        self._backoff_timer.timeout.connect(self._run_retry_self_check)
+
         # Token 主动刷新（30 分钟）
         self._token_timer = QTimer(self)
         self._token_timer.setInterval(30 * 60_000)
@@ -189,6 +215,7 @@ class PlatformSyncer(QObject):
             self._client.refresh_token = rt
 
         self._consecutive_auth_failures = 0
+        self._reset_backoff()
 
         # 始终重启（支持改密码后立即重连）
         self._stop_timers()
@@ -228,6 +255,7 @@ class PlatformSyncer(QObject):
         self._retry_timer.stop()
         self._upload_throttle.stop()
         self._token_timer.stop()
+        self._backoff_timer.stop()
 
     # ── pool_changed 节流上传 ──
 
@@ -276,6 +304,7 @@ class PlatformSyncer(QObject):
 
     def _on_upload_done(self, usernames: list[str]) -> None:
         """上传成功 → 主线程标记 DB（Architect #5）"""
+        self._reset_backoff()
         count = self._db.mark_uploaded(usernames)
         self._total_uploaded += count
         self._last_sync_time = datetime.now().strftime("%H:%M:%S")
@@ -341,10 +370,12 @@ class PlatformSyncer(QObject):
 
     def _on_poll_done(self, usernames: list[str]) -> None:
         """轮询成功 → 主线程更新 DB（Architect #5）"""
+        self._reset_backoff()
         self._db.mark_taken_by_platform(usernames)
         self._total_taken += len(usernames)
         self._last_sync_time = datetime.now().strftime("%H:%M:%S")
         self.status_changed.emit("已连接")
+        self._request_pending_upload_check()
 
     # ── Token / 错误处理 ──
 
@@ -367,6 +398,7 @@ class PlatformSyncer(QObject):
 
     def _on_tokens_updated(self, at: str, rt: str) -> None:
         """Token 更新 → 持久化到 DB（主线程）"""
+        self._reset_backoff()
         self._consecutive_auth_failures = 0
         self._client.access_token = at
         self._client.refresh_token = rt
@@ -387,7 +419,47 @@ class PlatformSyncer(QObject):
                 self._stop_timers()
                 self.error_occurred.emit("连续认证失败，已暂停平台同步。请检查设置。")
                 return
+        self._schedule_backoff_retry()
         self.error_occurred.emit(msg)
+
+    def _reset_backoff(self) -> None:
+        self._backoff_timer.stop()
+        self._next_backoff_ms = _RETRY_BACKOFF_BASE_MS
+
+    def _schedule_backoff_retry(self) -> None:
+        if not self._enabled or not self._api_url:
+            return
+        delay_ms = self._next_backoff_ms
+        self._backoff_timer.start(delay_ms)
+        self._next_backoff_ms = min(delay_ms * 2, _RETRY_BACKOFF_MAX_MS)
+
+    def _run_retry_self_check(self) -> None:
+        """退避定时器触发后，优先补传漏单，其次轮询平台状态。"""
+        if not self._enabled or not self._api_url:
+            return
+        if self._worker and self._worker.isRunning():
+            self._backoff_timer.start(_SELF_CHECK_BUSY_DELAY_MS)
+            return
+        if self._has_pending_completed_uploads():
+            self.try_upload_completed()
+            if self._worker and self._worker.isRunning():
+                return
+        self._do_poll()
+
+    def _has_pending_completed_uploads(self) -> bool:
+        return bool(self._db.get_completed_not_uploaded(limit=1))
+
+    def _request_pending_upload_check(self) -> None:
+        """轮询结束后顺手自检已完成未上传账号，避免漏补。"""
+        if not self._enabled or not self._api_url:
+            return
+        if not self._has_pending_completed_uploads():
+            return
+        self._upload_dirty = True
+        if self._worker and self._worker.isRunning():
+            self._resume_upload_after_worker = True
+            return
+        QTimer.singleShot(0, self._resume_pending_upload)
 
     # ── 统计属性 ──
 

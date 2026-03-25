@@ -51,7 +51,12 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
-from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, SLAVE_SELF_UPDATE_FILENAME, TcpCommand
+from common.protocol import (
+    ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+    SLAVE_SELF_UPDATE_FILENAME,
+    TcpCommand,
+    build_self_update_payload,
+)
 from master.app.common.config import cfg
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
@@ -1714,8 +1719,12 @@ class BigScreenInterface(ScrollArea):
             try:
                 raw = Path(p).read_bytes()
                 filename = Path(p).name
-                content_b64 = base64.b64encode(raw).decode("ascii")
-                files_data.append((filename, content_b64))
+                payload = (
+                    build_self_update_payload(filename, raw)
+                    if filename.lower() == SLAVE_SELF_UPDATE_FILENAME.lower()
+                    else base64.b64encode(raw).decode("ascii")
+                )
+                files_data.append((filename, payload))
             except OSError as e:
                 InfoBar.error(
                     "读取失败", f"{p}: {e}",
@@ -1728,11 +1737,11 @@ class BigScreenInterface(ScrollArea):
             f"将向全部 {len(ips)} 个在线节点覆盖写入 {len(files_data)} 个文件，是否继续？",
         ):
             return
-        for filename, content_b64 in files_data:
+        for filename, payload in files_data:
             if filename.lower() == SLAVE_SELF_UPDATE_FILENAME.lower():
-                self._tcp.broadcast(ips, TcpCommand.UPDATE_SELF, f"{filename}|{content_b64}")
+                self._tcp.broadcast(ips, TcpCommand.UPDATE_SELF, payload)
             else:
-                self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{content_b64}")
+                self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{payload}")
         file_names = ", ".join(Path(p).name for p in paths)
         self._nm.add_history("一键分发文件", scope, file_names)
         detail = "（含 Slave 自更新）" if any(

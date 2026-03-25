@@ -9,6 +9,7 @@ import time
 
 from common.protocol import (
     TcpCommand,
+    build_self_update_payload,
     build_tcp_command,
     build_udp_ext_online,
     parse_udp_message,
@@ -143,7 +144,7 @@ class TestTcpCommunication:
     def test_tcp_update_self_roundtrip(self):
         """完整往返: 自更新 payload 应原样透传。"""
         port = 19994
-        payload = "TriangleAlpha-Slave.exe|QUJD"
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"ABC")
         received_payload = []
 
         def server():

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
 import subprocess
 import sys
@@ -101,11 +102,7 @@ def launch_self_update_helper(update: PreparedSelfUpdate) -> None:
 
 
 def _parse_self_update_payload(payload: str) -> tuple[str, bytes]:
-    filename, sep, encoded = payload.partition("|")
-    filename = Path(filename.strip()).name
-    if not sep or not filename:
-        raise ValueError("自更新格式错误，需要 filename|BASE64")
-
+    filename, encoded, expected_size, expected_sha256 = _parse_self_update_metadata(payload)
     encoded = encoded.strip()
     if encoded.startswith("BASE64:"):
         encoded = encoded[7:]
@@ -119,7 +116,51 @@ def _parse_self_update_payload(payload: str) -> tuple[str, bytes]:
 
     if not raw:
         raise ValueError("自更新包为空")
+    if expected_size is not None and len(raw) != expected_size:
+        raise ValueError(f"自更新包大小不匹配: expected={expected_size} actual={len(raw)}")
+    if expected_sha256 is not None:
+        actual_sha256 = hashlib.sha256(raw).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise ValueError("自更新包 SHA256 校验失败")
     return filename, raw
+
+
+def _parse_self_update_metadata(payload: str) -> tuple[str, str, int | None, str | None]:
+    parts = payload.split("|", 3)
+    if len(parts) == 2:
+        filename, encoded = parts
+        safe_name = Path(filename.strip()).name
+        if not safe_name:
+            raise ValueError("自更新格式错误，需要 filename|BASE64")
+        return safe_name, encoded, None, None
+    if len(parts) != 4:
+        raise ValueError("自更新格式错误，需要 filename|BASE64 或 filename|SHA256:...|SIZE:...|BASE64")
+
+    filename, sha_part, size_part, encoded = parts
+    safe_name = Path(filename.strip()).name
+    if not safe_name:
+        raise ValueError("自更新目标文件名为空")
+    expected_sha256 = _parse_sha256_part(sha_part)
+    expected_size = _parse_size_part(size_part)
+    return safe_name, encoded, expected_size, expected_sha256
+
+
+def _parse_sha256_part(sha_part: str) -> str:
+    if not sha_part.startswith("SHA256:"):
+        raise ValueError("自更新格式错误，缺少 SHA256")
+    expected_sha256 = sha_part[7:].strip().lower()
+    if len(expected_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha256):
+        raise ValueError("自更新 SHA256 格式错误")
+    return expected_sha256
+
+
+def _parse_size_part(size_part: str) -> int:
+    if not size_part.startswith("SIZE:"):
+        raise ValueError("自更新格式错误，缺少 SIZE")
+    raw_size = size_part[5:].strip()
+    if not raw_size.isdigit():
+        raise ValueError("自更新 SIZE 格式错误")
+    return int(raw_size)
 
 
 def _resolve_target_executable(base_dir: Path, filename: str, current_executable: Path | None) -> Path:

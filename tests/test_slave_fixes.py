@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import inspect
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from common.protocol import ParsedTcpCommand, TcpCommand
 
@@ -305,6 +308,7 @@ class TestM5SelfUpdate:
     """验证 slave 自更新的暂存与 helper 生成。"""
 
     def test_prepare_self_update_writes_pending_and_helper(self, tmp_path):
+        from common.protocol import build_self_update_payload
         from slave.self_update import prepare_self_update
 
         exe_path = tmp_path / "nested" / "TriangleAlpha-Slave.exe"
@@ -312,12 +316,12 @@ class TestM5SelfUpdate:
         exe_path.write_bytes(b"old")
         guard_lock_path = tmp_path / "TriangleAlphaSlave.guard.pid"
         guard_lock_path.write_text("1234", encoding="utf-8")
-        encoded = base64.b64encode(b"new-binary").decode("ascii")
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"new-binary")
 
         with patch("slave.self_update.tempfile.gettempdir", return_value=str(tmp_path)):
             update = prepare_self_update(
                 tmp_path,
-                f"TriangleAlpha-Slave.exe|{encoded}",
+                payload,
                 current_pid=4321,
                 current_executable=exe_path,
             )
@@ -335,22 +339,65 @@ class TestM5SelfUpdate:
         assert "PYINSTALLER_RESET_ENVIRONMENT" in helper_text
 
     def test_prepare_self_update_ignores_same_guard_pid(self, tmp_path):
+        from common.protocol import build_self_update_payload
         from slave.self_update import prepare_self_update
 
         exe_path = tmp_path / "TriangleAlpha-Slave.exe"
         exe_path.write_bytes(b"old")
         (tmp_path / "TriangleAlphaSlave.guard.pid").write_text("4321", encoding="utf-8")
-        encoded = base64.b64encode(b"new-binary").decode("ascii")
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"new-binary")
 
         with patch("slave.self_update.tempfile.gettempdir", return_value=str(tmp_path)):
             update = prepare_self_update(
                 tmp_path,
-                f"TriangleAlpha-Slave.exe|{encoded}",
+                payload,
                 current_pid=4321,
                 current_executable=exe_path,
             )
 
         assert update.guardian_pid is None
+
+    def test_prepare_self_update_rejects_sha256_mismatch(self, tmp_path):
+        from common.protocol import build_self_update_payload
+        from slave.self_update import prepare_self_update
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"old")
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"new-binary")
+        wrong_sha256 = hashlib.sha256(b"other-binary").hexdigest()
+        payload = payload.replace(
+            hashlib.sha256(b"new-binary").hexdigest(),
+            wrong_sha256,
+            1,
+        )
+
+        with pytest.raises(ValueError, match="SHA256"):
+            prepare_self_update(
+                tmp_path,
+                payload,
+                current_pid=4321,
+                current_executable=exe_path,
+            )
+
+    def test_prepare_self_update_rejects_size_mismatch(self, tmp_path):
+        from common.protocol import build_self_update_payload
+        from slave.self_update import prepare_self_update
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"old")
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"new-binary").replace(
+            "SIZE:10",
+            "SIZE:999",
+            1,
+        )
+
+        with pytest.raises(ValueError, match="大小不匹配"):
+            prepare_self_update(
+                tmp_path,
+                payload,
+                current_pid=4321,
+                current_executable=exe_path,
+            )
 
     def test_launch_self_update_helper_resets_pyinstaller_env(self, tmp_path):
         from slave.self_update import PreparedSelfUpdate, launch_self_update_helper

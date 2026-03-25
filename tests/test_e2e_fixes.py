@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from common.protocol import (
     TcpCommand,
+    build_self_update_payload,
     build_tcp_command,
     build_udp_ext_online,
     build_udp_offline,
@@ -341,8 +342,9 @@ class TestProtocolCompatibility:
         assert cmd == "DELETEFILE|a.txt|b.txt"
 
         # UPDATE_SELF（payload 原样透传）
-        cmd = build_tcp_command(TcpCommand.UPDATE_SELF, "TriangleAlpha-Slave.exe|QUJD")
-        assert cmd == "UPDATESELF|TriangleAlpha-Slave.exe|QUJD"
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"ABC")
+        cmd = build_tcp_command(TcpCommand.UPDATE_SELF, payload)
+        assert cmd == f"UPDATESELF|{payload}"
 
         # START_EXE (无 payload)
         cmd = build_tcp_command(TcpCommand.START_EXE)

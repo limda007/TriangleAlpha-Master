@@ -7,6 +7,7 @@ import json
 from common.protocol import (
     TcpCommand,
     UdpMessageType,
+    build_self_update_payload,
     build_tcp_command,
     build_udp_account_sync,
     build_udp_ext_online,
@@ -46,6 +47,15 @@ class TestTcpProtocolContracts:
         assert parsed is not None
         assert parsed.command == TcpCommand.EXT_SET_CONFIG
         assert parsed.payload == "武器配置.txt|AK74|扩展"
+
+    def test_build_self_update_payload_includes_hash_and_size(self):
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"ABC")
+
+        parts = payload.split("|", 3)
+        assert parts[0] == "TriangleAlpha-Slave.exe"
+        assert parts[1].startswith("SHA256:")
+        assert parts[2] == "SIZE:3"
+        assert base64.b64decode(parts[3]) == b"ABC"
 
 
 class TestUdpProtocolContracts:

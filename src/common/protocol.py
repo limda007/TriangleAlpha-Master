@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import base64
 import enum
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
 UDP_PORT = 8888
 TCP_CMD_PORT = 9999
@@ -211,6 +213,15 @@ def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
         return f"{cmd.value}|{payload}"
     else:
         return f"{cmd.value}|"
+
+
+def build_self_update_payload(filename: str, raw: bytes) -> str:
+    safe_name = Path(filename.strip()).name
+    if not safe_name:
+        raise ValueError("自更新文件名不能为空")
+    content_b64 = base64.b64encode(raw).decode("ascii")
+    sha256 = hashlib.sha256(raw).hexdigest()
+    return f"{safe_name}|SHA256:{sha256}|SIZE:{len(raw)}|{content_b64}"
 
 
 def parse_tcp_command(raw: str) -> ParsedTcpCommand | None:
