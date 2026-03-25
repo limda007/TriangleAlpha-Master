@@ -423,7 +423,12 @@ class AccountInterface(ScrollArea):
                 usernames.append(item.text())
         if not usernames:
             return
-        dlg = MessageBox("确认删除", f"确定要删除 {len(usernames)} 个账号吗？此操作不可撤销。", self)
+        dlg = MessageBox(
+            "确认删除",
+            f"确定要删除 {len(usernames)} 个账号吗？\n"
+            "删除后 slave 同步不会恢复这些账号，手动重新导入可恢复。",
+            self,
+        )
         if not dlg.exec():
             return
         deleted = self._pool.delete_by_usernames(usernames)

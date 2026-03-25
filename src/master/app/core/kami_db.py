@@ -49,15 +49,37 @@ _STATUS_FROM_API = {
     False: "已过期",
 }
 
+# API 可能返回 '有效' 等别名，统一映射为 DB 合法值
+_STATUS_NORMALIZE: dict[str, str] = {
+    "有效": "未使用",
+    "已激活": "已激活",
+    "已过期": "已过期",
+    "未使用": "未使用",
+    "未知": "未知",
+}
+_VALID_DB_STATUSES = frozenset(_STATUS_NORMALIZE.values())
+
 
 def _parse_device_count(val: str | int) -> tuple[int, int]:
-    """解析 device_count 字段，如 '0/1' → (0, 1)"""
-    if isinstance(val, str) and "/" in val:
-        parts = val.split("/", 1)
-        try:
-            return int(parts[0]), int(parts[1])
-        except ValueError:
-            return 0, 0
+    """解析 device_count 字段，如 '0/1' → (0, 1)
+
+    缺失或格式异常时返回 (0, 0)，调用方应对 device_total=0 做后备处理。
+    """
+    if isinstance(val, int):
+        # 直接给了一个整数 → 视为 total
+        return (0, max(0, val)) if val > 0 else (0, 0)
+    if isinstance(val, str):
+        if "/" in val:
+            parts = val.split("/", 1)
+            try:
+                return int(parts[0]), int(parts[1])
+            except ValueError:
+                return 0, 0
+        # 纯数字字符串 → 视为 total
+        stripped = val.strip()
+        if stripped.isdigit():
+            v = int(stripped)
+            return (0, v) if v > 0 else (0, 0)
     return 0, 0
 
 
@@ -87,6 +109,8 @@ class KamiDB(QObject):
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_KAMI_SCHEMA)
         self._conn.commit()
+        # 迁移：修正历史脏数据
+        self._migrate_status_aliases()
         # 缓存计数
         self._total = 0
         self._activated = 0
@@ -110,9 +134,10 @@ class KamiDB(QObject):
                 continue
             ok = r.get("ok", False)
             # 优先使用 API 返回的 status 字段，fallback 到 ok 映射
-            status = r.get("status", _STATUS_FROM_API.get(ok, "未知"))
-            # 确保 status 在允许的值范围内
-            if status not in ("有效", "已过期", "未使用", "未知"):
+            raw_status = r.get("status", _STATUS_FROM_API.get(ok, "未知"))
+            # 规范化为 DB 合法值
+            status = _STATUS_NORMALIZE.get(raw_status, "")
+            if not status:
                 status = _STATUS_FROM_API.get(ok, "未知")
             kami_type = r.get("kami_type", "")
             end_date = r.get("end_date", "")
@@ -121,6 +146,9 @@ class KamiDB(QObject):
             device_used, device_total = _parse_device_count(
                 r.get("device_count", "0/0"),
             )
+            # 已激活卡密 device_total 不应为 0，后备为 1
+            if status == "已激活" and device_total == 0:
+                device_total = 1
             # 推断激活日期
             activated_at = _infer_activated_at(end_date, remaining)
             cur = self._conn.execute(
@@ -289,6 +317,21 @@ class KamiDB(QObject):
 
     # ── 内部方法 ──────────────────────────────────────────
 
+    def _migrate_status_aliases(self) -> None:
+        """迁移：将历史脏数据 status='有效' 修正为 '未使用'，
+
+        同时修复 device_total=0 的已激活卡密（后备为 1）。
+        """
+        changed = self._conn.execute(
+            "UPDATE kamis SET status='未使用' WHERE status='有效'",
+        ).rowcount
+        changed += self._conn.execute(
+            "UPDATE kamis SET device_total=1 "
+            "WHERE status='已激活' AND device_total=0",
+        ).rowcount
+        if changed:
+            self._conn.commit()
+
     def _refresh_counts(self) -> None:
         cur = self._conn.execute(
             "SELECT status, COUNT(*) AS cnt FROM kamis GROUP BY status",
@@ -303,13 +346,17 @@ class KamiDB(QObject):
     def _row_to_info(row: sqlite3.Row) -> KamiInfo:
         nodes_str = row["nodes"] if row["nodes"] else ""
         bound_nodes = [n.strip() for n in nodes_str.split(",") if n.strip()]
+        try:
+            status = KamiStatus(row["status"])
+        except ValueError:
+            status = KamiStatus.UNKNOWN
         return KamiInfo(
             id=row["id"],
             kami_code=row["kami_code"],
             kami_type=row["kami_type"],
             end_date=row["end_date"],
             remaining_days=row["remaining_days"],
-            status=KamiStatus(row["status"]),
+            status=status,
             device_used=row["device_used"],
             device_total=row["device_total"],
             activated_at=row["activated_at"] or "",

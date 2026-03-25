@@ -855,3 +855,120 @@ class TestPlatformUpload:
         count = db.mark_taken_by_platform(["u1"])
         assert count == 0
         assert db.get_all_accounts()[0].status == AccountStatus.IDLE
+
+
+class TestSoftDelete:
+    """软删除相关测试：防止 slave sync 复活已删除账号"""
+
+    def test_delete_marks_as_deleted(self, db: AccountDB) -> None:
+        """delete_by_usernames 将账号标记为 '已删除' 而非物理删除"""
+        db.import_fresh("u1----p1\nu2----p2")
+        deleted = db.delete_by_usernames(["u1"])
+        assert deleted == 1
+        # 软删除的账号不出现在 get_all_accounts
+        accs = db.get_all_accounts()
+        assert len(accs) == 1
+        assert accs[0].username == "u2"
+        # 但物理行仍然存在
+        row = db._conn.execute(
+            "SELECT status FROM accounts WHERE username='u1'"
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == "已删除"
+
+    def test_deleted_excluded_from_total_count(self, db: AccountDB) -> None:
+        """已删除账号不计入 total_count"""
+        db.import_fresh("u1----p1\nu2----p2\nu3----p3")
+        db.delete_by_usernames(["u1"])
+        assert db.total_count == 2
+        assert db.available_count == 2
+
+    def test_sync_does_not_resurrect_deleted(self, db: AccountDB) -> None:
+        """slave ACCOUNT_SYNC 不会复活已软删除的账号"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.delete_by_usernames(["u1"])
+        # slave 同步上来同一个账号
+        accounts = [
+            {"username": "u1", "password": "p1", "level": 10, "jin_bi": "500",
+             "is_banned": False, "is_active": False},
+        ]
+        inserted, updated = db.upsert_from_sync("VM-01", accounts)
+        assert inserted == 0
+        assert updated == 0
+        # 仍然只有 u2 可见
+        accs = db.get_all_accounts()
+        assert len(accs) == 1
+        assert accs[0].username == "u2"
+
+    def test_sync_does_not_resurrect_deleted_even_active(self, db: AccountDB) -> None:
+        """即使 slave 报告已删除账号为 is_active，也不复活"""
+        db.import_fresh("u1----p1")
+        db.delete_by_usernames(["u1"])
+        accounts = [
+            {"username": "u1", "password": "p1", "level": 5, "jin_bi": "200",
+             "is_banned": False, "is_active": True},
+        ]
+        inserted, updated = db.upsert_from_sync("VM-01", accounts)
+        assert inserted == 0
+        assert updated == 0
+        assert db.total_count == 0
+
+    def test_manual_import_resurrects_deleted(self, db: AccountDB) -> None:
+        """用户手动导入可以恢复软删除的账号"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.delete_by_usernames(["u1"])
+        assert db.total_count == 1
+        # 手动重新导入
+        inserted, skipped = db.load_from_text("u1----p1")
+        assert inserted == 1
+        assert skipped == 0
+        assert db.total_count == 2
+        accs = {a.username: a for a in db.get_all_accounts()}
+        assert accs["u1"].status == AccountStatus.IDLE
+
+    def test_import_fresh_clears_deleted(self, db: AccountDB) -> None:
+        """import_fresh 清空所有数据包括软删除记录"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.delete_by_usernames(["u1"])
+        db.import_fresh("u1----p1\nu3----p3")
+        assert db.total_count == 2
+        accs = {a.username: a for a in db.get_all_accounts()}
+        assert "u1" in accs
+        assert "u3" in accs
+
+    def test_clear_all_hard_deletes(self, db: AccountDB) -> None:
+        """clear_all 物理删除所有记录（包含软删除）"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.delete_by_usernames(["u1"])
+        db.clear_all()
+        assert db.total_count == 0
+        row = db._conn.execute(
+            "SELECT COUNT(*) FROM accounts"
+        ).fetchone()
+        assert row[0] == 0
+
+    def test_purge_deleted(self, db: AccountDB) -> None:
+        """purge_deleted 物理移除所有软删除记录"""
+        db.import_fresh("u1----p1\nu2----p2\nu3----p3")
+        db.delete_by_usernames(["u1", "u2"])
+        purged = db.purge_deleted()
+        assert purged == 2
+        # 物理行已不存在
+        row = db._conn.execute(
+            "SELECT COUNT(*) FROM accounts"
+        ).fetchone()
+        assert row[0] == 1
+
+    def test_export_all_excludes_deleted(self, db: AccountDB) -> None:
+        """export_all 不导出已删除账号"""
+        db.import_fresh("u1----p1\nu2----p2")
+        db.delete_by_usernames(["u1"])
+        text = db.export_all()
+        assert "u1" not in text
+        assert "u2" in text
+
+    def test_delete_idempotent(self, db: AccountDB) -> None:
+        """重复删除同一账号，第二次返回 0"""
+        db.import_fresh("u1----p1")
+        assert db.delete_by_usernames(["u1"]) == 1
+        assert db.delete_by_usernames(["u1"]) == 0

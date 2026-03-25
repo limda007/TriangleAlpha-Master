@@ -15,6 +15,7 @@ class AccountStatus(enum.Enum):
     COMPLETED = "已完成"
     FETCHED = "已取号"
     BANNED = "已封禁"
+    DELETED = "已删除"
 
 
 @dataclass

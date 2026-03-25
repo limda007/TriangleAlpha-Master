@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     bind_email_pwd   TEXT    NOT NULL DEFAULT '',
     notes            TEXT    NOT NULL DEFAULT '',
     status           TEXT    NOT NULL DEFAULT '空闲中'
-                     CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
+                     CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁', '已删除')),
     assigned_machine TEXT    NOT NULL DEFAULT '',
     level            INTEGER NOT NULL DEFAULT 0,
     jin_bi           TEXT    NOT NULL DEFAULT '0',
@@ -52,7 +52,7 @@ _LEGACY_STATUS_MAP = {
     "完成": "已完成",
     "取号": "已取号",
 }
-_EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'", "'已封禁'")
+_EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'", "'已封禁'", "'已删除'")
 
 
 class AccountDB(QObject):
@@ -161,6 +161,14 @@ class AccountDB(QObject):
             )
         if not rows:
             return 0, 0
+        # 恢复已软删除的账号（用户手动导入时允许复活）
+        usernames = [r[0] for r in rows]
+        placeholders = ",".join("?" * len(usernames))
+        resurrected = self._conn.execute(
+            f"UPDATE accounts SET status='空闲中', assigned_machine='' "
+            f"WHERE username IN ({placeholders}) AND status='已删除'",  # noqa: S608
+            usernames,
+        ).rowcount
         before_changes = self._conn.total_changes
         self._conn.executemany(
             "INSERT OR IGNORE INTO accounts "
@@ -169,8 +177,8 @@ class AccountDB(QObject):
             rows,
         )
         inserted = self._conn.total_changes - before_changes
-        skipped = len(rows) - inserted
-        return inserted, skipped
+        skipped = len(rows) - inserted - resurrected
+        return inserted + resurrected, max(0, skipped)
 
     # ── 分配 / 回收 ───────────────────────────────────────
 
@@ -322,6 +330,10 @@ class AccountDB(QObject):
                 (username,),
             ).fetchone()
 
+            # 软删除的账号：不允许 slave sync 复活
+            if existing is not None and existing["status"] == "已删除":
+                continue
+
             if existing is None:
                 # 新账号：确定初始状态
                 if is_banned:
@@ -421,8 +433,10 @@ class AccountDB(QObject):
         return self._row_to_info(row) if row else None
 
     def get_all_accounts(self) -> list[AccountInfo]:
-        """全量查询，按 id 排序"""
-        cur = self._conn.execute("SELECT * FROM accounts ORDER BY id")
+        """全量查询，按 id 排序（排除软删除）"""
+        cur = self._conn.execute(
+            "SELECT * FROM accounts WHERE status != '已删除' ORDER BY id"
+        )
         return [self._row_to_info(r) for r in cur.fetchall()]
 
     def get_idle_accounts(self) -> list[AccountInfo]:
@@ -504,8 +518,10 @@ class AccountDB(QObject):
         return "\n".join(lines)
 
     def export_all(self) -> str:
-        """导出所有账号（含表头），不改变状态。"""
-        cur = self._conn.execute("SELECT * FROM accounts ORDER BY id")
+        """导出所有账号（含表头），不改变状态。排除软删除。"""
+        cur = self._conn.execute(
+            "SELECT * FROM accounts WHERE status != '已删除' ORDER BY id"
+        )
         lines: list[str] = [EXPORT_ACCOUNT_HEADER]
         for row in cur.fetchall():
             login_time_str = row["last_login_at"] or "无"
@@ -527,16 +543,24 @@ class AccountDB(QObject):
         self.pool_changed.emit()
 
     def delete_by_usernames(self, usernames: list[str]) -> int:
-        """按用户名批量删除，返回删除数"""
+        """按用户名批量软删除（标记为 '已删除'），防止 slave sync 复活。"""
         if not usernames:
             return 0
         placeholders = ",".join("?" * len(usernames))
         cur = self._conn.execute(
-            f"DELETE FROM accounts WHERE username IN ({placeholders})", usernames,  # noqa: S608
+            f"UPDATE accounts SET status='已删除', assigned_machine='' "
+            f"WHERE username IN ({placeholders}) AND status != '已删除'",  # noqa: S608
+            usernames,
         )
         self._conn.commit()
         self._refresh_counts()
         self.pool_changed.emit()
+        return cur.rowcount
+
+    def purge_deleted(self) -> int:
+        """物理删除所有软删除记录，释放空间。"""
+        cur = self._conn.execute("DELETE FROM accounts WHERE status='已删除'")
+        self._conn.commit()
         return cur.rowcount
 
     # ── 统计属性 ───────────────────────────────────────────
@@ -634,7 +658,7 @@ class AccountDB(QObject):
                 bind_email_pwd   TEXT    NOT NULL DEFAULT '',
                 notes            TEXT    NOT NULL DEFAULT '',
                 status           TEXT    NOT NULL DEFAULT '空闲中'
-                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁')),
+                                 CHECK (status IN ('空闲中', '运行中', '已完成', '已取号', '已封禁', '已删除')),
                 assigned_machine TEXT    NOT NULL DEFAULT '',
                 level            INTEGER NOT NULL DEFAULT 0,
                 jin_bi           TEXT    NOT NULL DEFAULT '0',
@@ -680,6 +704,7 @@ class AccountDB(QObject):
             "SELECT status, COUNT(*) AS cnt FROM accounts GROUP BY status",
         )
         counts = {row["status"]: row["cnt"] for row in cur.fetchall()}
+        deleted = counts.pop("已删除", 0)  # noqa: F841
         self._total = sum(counts.values())
         self._available = counts.get("空闲中", 0)
         self._in_use = counts.get("运行中", 0)
