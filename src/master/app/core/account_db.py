@@ -68,7 +68,7 @@ class AccountDB(QObject):
     def __init__(self, db_path: str | Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn: sqlite3.Connection = sqlite3.connect(self._db_path, timeout=10)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._write_lock = self._get_write_lock(self._db_path)
@@ -89,9 +89,8 @@ class AccountDB(QObject):
 
     def close(self) -> None:
         """关闭数据库连接"""
-        if self._conn:
+        with contextlib.suppress(Exception):
             self._conn.close()
-            self._conn = None  # type: ignore[assignment]
 
     # ── 配置键值存取 ──
 

@@ -1,6 +1,7 @@
 """卡密 SQLite 持久化管理器"""
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -90,12 +91,22 @@ class KamiDB(QObject):
 
     kami_changed = pyqtSignal()
 
-    def __init__(self, db_path: str | Path, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        parent: QObject | None = None,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         super().__init__(parent)
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path, timeout=10)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._owns_conn = conn is None
+        if conn is not None:
+            self._conn = conn
+        else:
+            self._conn = sqlite3.connect(self._db_path, timeout=10)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_KAMI_SCHEMA)
         self._conn.commit()
@@ -109,9 +120,9 @@ class KamiDB(QObject):
         self._refresh_counts()
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None  # type: ignore[assignment]
+        if self._owns_conn:
+            with contextlib.suppress(Exception):
+                self._conn.close()
 
     # ── 导入 / 更新 ──────────────────────────────────────
 

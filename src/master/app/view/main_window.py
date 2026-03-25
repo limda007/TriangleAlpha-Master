@@ -48,7 +48,7 @@ class MainWindow(FluentWindow):
         self.nodeManager = NodeManager(self)
         self.tcpCommander = TcpCommander(parent=self)
         self.accountPool = AccountDB(_get_db_path(), parent=self)
-        self.kamiDB = KamiDB(_get_db_path(), parent=self)
+        self.kamiDB = KamiDB(_get_db_path(), parent=self, conn=self.accountPool._conn)
         self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
         self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
