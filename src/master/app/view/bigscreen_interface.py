@@ -64,6 +64,25 @@ from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 
 _BALANCE_API = "http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance"
+_SELF_UPDATE_HASH_MIN_VERSION = (1, 0, 54)
+
+
+def _parse_version_tuple(version: str) -> tuple[int, ...] | None:
+    parts = [part.strip() for part in version.split(".") if part.strip()]
+    if not parts:
+        return None
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
+def _supports_self_update_hash_payload(version: str) -> bool:
+    parsed = _parse_version_tuple(version)
+    if parsed is None:
+        return False
+    normalized = parsed + (0,) * max(0, len(_SELF_UPDATE_HASH_MIN_VERSION) - len(parsed))
+    return normalized[: len(_SELF_UPDATE_HASH_MIN_VERSION)] >= _SELF_UPDATE_HASH_MIN_VERSION
 
 
 class _BalanceWorker(QThread):
@@ -1707,24 +1726,20 @@ class BigScreenInterface(ScrollArea):
         paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
         if not paths:
             return
-        ips, selected = self._getTargetIPs()
-        if not ips:
+        nodes, selected = self._getSelectedOnlineNodes()
+        if not nodes:
             InfoBar.warning(
                 "提示", "没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
-        files_data: list[tuple[str, str]] = []
+        ips = [node.ip for node in nodes]
+        files_data: list[tuple[str, bytes]] = []
         for p in paths:
             try:
                 raw = Path(p).read_bytes()
                 filename = Path(p).name
-                payload = (
-                    build_self_update_payload(filename, raw)
-                    if filename.lower() == SLAVE_SELF_UPDATE_FILENAME.lower()
-                    else base64.b64encode(raw).decode("ascii")
-                )
-                files_data.append((filename, payload))
+                files_data.append((filename, raw))
             except OSError as e:
                 InfoBar.error(
                     "读取失败", f"{p}: {e}",
@@ -1737,10 +1752,11 @@ class BigScreenInterface(ScrollArea):
             f"将向全部 {len(ips)} 个在线节点覆盖写入 {len(files_data)} 个文件，是否继续？",
         ):
             return
-        for filename, payload in files_data:
+        for filename, raw in files_data:
             if filename.lower() == SLAVE_SELF_UPDATE_FILENAME.lower():
-                self._tcp.broadcast(ips, TcpCommand.UPDATE_SELF, payload)
+                self._broadcast_self_update(nodes, filename, raw)
             else:
+                payload = base64.b64encode(raw).decode("ascii")
                 self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{payload}")
         file_names = ", ".join(Path(p).name for p in paths)
         self._nm.add_history("一键分发文件", scope, file_names)
@@ -1751,6 +1767,23 @@ class BigScreenInterface(ScrollArea):
             "已分发", f"{len(files_data)} 个文件已发送到 {scope}{detail}",
             parent=self, position=InfoBarPosition.TOP, duration=3000,
         )
+
+    def _broadcast_self_update(self, nodes: list, filename: str, raw: bytes) -> None:
+        """按节点版本拆分自更新协议，兼容旧版 slave 的升级链路。"""
+        legacy_ips: list[str] = []
+        modern_ips: list[str] = []
+        for node in nodes:
+            if _supports_self_update_hash_payload(getattr(node, "slave_version", "")):
+                modern_ips.append(node.ip)
+            else:
+                legacy_ips.append(node.ip)
+
+        legacy_payload = f"{Path(filename).name}|{base64.b64encode(raw).decode('ascii')}"
+        modern_payload = build_self_update_payload(filename, raw)
+        if legacy_ips:
+            self._tcp.broadcast(legacy_ips, TcpCommand.UPDATE_SELF, legacy_payload)
+        if modern_ips:
+            self._tcp.broadcast(modern_ips, TcpCommand.UPDATE_SELF, modern_payload)
 
     def _onNodeOffline(self, name: str) -> None:
         """节点离线通知（5s 内超过 5 个时汇总显示）"""

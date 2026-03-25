@@ -11,12 +11,12 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QHeaderView, QWidget
 
 from common.models import NodeInfo
-from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, TcpCommand
+from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, TcpCommand, build_self_update_payload
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
-from master.app.view.bigscreen_interface import BigScreenInterface
+from master.app.view.bigscreen_interface import BigScreenInterface, _supports_self_update_hash_payload
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -137,6 +137,45 @@ def test_one_click_start_pushes_selected_files(
     ]
     assert broadcast_mock.call_args_list == expected
     success_mock.assert_called_once()
+
+
+def test_one_click_start_self_update_uses_legacy_payload_for_old_nodes(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    widget, node_manager, commander, _account_db = bigscreen
+    node_manager.nodes["VM-OLD"] = NodeInfo(machine_name="VM-OLD", ip="10.0.0.1", slave_version="1.0.53")
+    node_manager.nodes["VM-NEW"] = NodeInfo(machine_name="VM-NEW", ip="10.0.0.2", slave_version="1.0.54")
+    widget._refreshNodeTable()
+
+    exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+    exe_path.write_bytes(b"new-slave-binary")
+
+    broadcast_mock = MagicMock()
+    monkeypatch.setattr(widget, "_confirmDangerous", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(commander, "broadcast", broadcast_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", MagicMock())
+    monkeypatch.setattr(
+        "master.app.view.bigscreen_interface.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(exe_path)], ""),
+    )
+
+    widget._oneClickStart()
+
+    legacy_payload = f"{exe_path.name}|{base64.b64encode(exe_path.read_bytes()).decode('ascii')}"
+    modern_payload = build_self_update_payload(exe_path.name, exe_path.read_bytes())
+    assert broadcast_mock.call_args_list == [
+        call(["10.0.0.1"], TcpCommand.UPDATE_SELF, legacy_payload),
+        call(["10.0.0.2"], TcpCommand.UPDATE_SELF, modern_payload),
+    ]
+
+
+def test_supports_self_update_hash_payload_requires_1_0_54_or_newer() -> None:
+    assert not _supports_self_update_hash_payload("")
+    assert not _supports_self_update_hash_payload("1.0.53")
+    assert _supports_self_update_hash_payload("1.0.54")
+    assert _supports_self_update_hash_payload("1.1.0")
 
 
 def test_clean_standalone_accounts_cleans_runtime_files(
