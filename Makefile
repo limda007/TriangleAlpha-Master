@@ -69,6 +69,7 @@ deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
 	@echo ">>> 停止旧进程..."
 	-ssh $(VM_HOST) "taskkill /F /IM TriangleAlpha-Slave.exe 2>nul"
 	-ssh $(VM_HOST) "taskkill /F /IM SlaveClientConsole.exe 2>nul"
+	-ssh $(VM_HOST) "del /F /Q \"$(VM_DEPLOY_DIR)\\SlaveClientConsole.exe\" 2>nul"
 	@echo ">>> 在 VM 上构建..."
 	ssh $(VM_HOST) "cd $(VM_BUILD_DIR) && $(VM_PYTHON) -m PyInstaller --clean --noconfirm slave.spec"
 	@echo ">>> 部署..."

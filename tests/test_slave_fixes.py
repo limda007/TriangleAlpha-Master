@@ -535,13 +535,15 @@ class TestH11SlaveSingleInstance:
         assert placeholder is not None
         assert placeholder.read_bytes() == b"fake-exe"
 
-    def test_ensure_console_placeholder_keeps_existing_small_stub(self, tmp_path):
+    def test_ensure_console_placeholder_keeps_existing_fresh_small_stub(self, tmp_path):
         from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
 
         exe_path = tmp_path / "TriangleAlpha-Slave.exe"
         exe_path.write_bytes(b"x" * (2 * 1024 * 1024))
         placeholder_path = tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
         placeholder_path.write_bytes(b"MZtiny")
+        placeholder_path.touch()
+        os.utime(placeholder_path, (exe_path.stat().st_mtime + 10, exe_path.stat().st_mtime + 10))
 
         with (
             patch("slave.main.os.name", "nt"),
@@ -554,6 +556,31 @@ class TestH11SlaveSingleInstance:
         assert placeholder is not None
         assert placeholder.read_bytes() == b"MZtiny"
         mock_build.assert_not_called()
+
+    def test_ensure_console_placeholder_rebuilds_stale_small_stub(self, tmp_path):
+        from slave.main import SLAVE_CLIENT_CONSOLE_FILENAME, _ensure_console_placeholder
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"x" * (2 * 1024 * 1024))
+        placeholder_path = tmp_path / SLAVE_CLIENT_CONSOLE_FILENAME
+        placeholder_path.write_bytes(b"MZold")
+        os.utime(placeholder_path, (exe_path.stat().st_mtime - 10, exe_path.stat().st_mtime - 10))
+
+        def _fake_build(path):
+            path.write_bytes(b"MZnew")
+            return True
+
+        with (
+            patch("slave.main.os.name", "nt"),
+            patch("slave.main.sys.frozen", True, create=True),
+            patch("slave.main._build_console_placeholder_stub", side_effect=_fake_build) as mock_build,
+        ):
+            placeholder = _ensure_console_placeholder(exe_path)
+
+        assert placeholder == placeholder_path
+        assert placeholder is not None
+        assert placeholder.read_bytes() == b"MZnew"
+        mock_build.assert_called_once_with(placeholder_path)
 
     def test_run_console_placeholder_waits_until_parent_exits(self):
         from slave.main import _run_console_placeholder

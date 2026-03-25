@@ -183,6 +183,15 @@ def _is_small_console_placeholder(placeholder_path: Path) -> bool:
         return False
 
 
+def _is_fresh_console_placeholder(source_path: Path, placeholder_path: Path) -> bool:
+    if not _is_small_console_placeholder(placeholder_path):
+        return False
+    try:
+        return placeholder_path.stat().st_mtime >= source_path.stat().st_mtime
+    except OSError:
+        return False
+
+
 def _build_console_placeholder_stub(placeholder_path: Path) -> bool:
     csc_path = _find_csc()
     if csc_path is None:
@@ -228,7 +237,7 @@ def _ensure_console_placeholder(current_executable: Path | None = None) -> Path 
         return None
 
     placeholder_path = source_path.parent / SLAVE_CLIENT_CONSOLE_FILENAME
-    if _is_small_console_placeholder(placeholder_path):
+    if _is_fresh_console_placeholder(source_path, placeholder_path):
         return placeholder_path
 
     if _build_console_placeholder_stub(placeholder_path):
