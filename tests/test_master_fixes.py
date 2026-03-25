@@ -256,16 +256,6 @@ class TestKamiBindingGuards:
         assert db.get_kami_for_node("VM-01") is None
         db.close()
 
-    def test_upsert_normalizes_valid_status_alias_to_unused(self, tmp_path):
-        db = KamiDB(tmp_path / "kami.db")
-        db.upsert_kamis([
-            {"kami": "KAMI-ALIAS", "ok": True, "status": "有效", "device_count": "0/3"},
-        ])
-
-        kami = db.get_all_kamis()[0]
-        assert kami.status.value == "未使用"
-        assert db.find_available_kami() is None
-        db.close()
 
     def test_upsert_sets_fallback_device_total_for_activated_kami(self, tmp_path):
         db = KamiDB(tmp_path / "kami.db")

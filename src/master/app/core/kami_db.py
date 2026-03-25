@@ -49,16 +49,6 @@ _STATUS_FROM_API = {
     False: "已过期",
 }
 
-# API 可能返回 '有效' 等别名，统一映射为 DB 合法值
-_STATUS_NORMALIZE: dict[str, str] = {
-    "有效": "未使用",
-    "已激活": "已激活",
-    "已过期": "已过期",
-    "未使用": "未使用",
-    "未知": "未知",
-}
-_VALID_DB_STATUSES = frozenset(_STATUS_NORMALIZE.values())
-
 
 def _parse_device_count(val: str | int) -> tuple[int, int]:
     """解析 device_count 字段，如 '0/1' → (0, 1)
@@ -135,10 +125,8 @@ class KamiDB(QObject):
             ok = r.get("ok", False)
             # 优先使用 API 返回的 status 字段，fallback 到 ok 映射
             raw_status = r.get("status", _STATUS_FROM_API.get(ok, "未知"))
-            # 规范化为 DB 合法值
-            status = _STATUS_NORMALIZE.get(raw_status, "")
-            if not status:
-                status = _STATUS_FROM_API.get(ok, "未知")
+            # 确保 status 在 DB 合法值范围内
+            status = raw_status if raw_status in KamiStatus._value2member_map_ else _STATUS_FROM_API.get(ok, "未知")
             kami_type = r.get("kami_type", "")
             end_date = r.get("end_date", "")
             remaining = r.get("remaining_days", 0)
@@ -318,14 +306,8 @@ class KamiDB(QObject):
     # ── 内部方法 ──────────────────────────────────────────
 
     def _migrate_status_aliases(self) -> None:
-        """迁移：将历史脏数据 status='有效' 修正为 '未使用'，
-
-        同时修复 device_total=0 的已激活卡密（后备为 1）。
-        """
+        """迁移：修复 device_total=0 的已激活卡密（后备为 1）。"""
         changed = self._conn.execute(
-            "UPDATE kamis SET status='未使用' WHERE status='有效'",
-        ).rowcount
-        changed += self._conn.execute(
             "UPDATE kamis SET device_total=1 "
             "WHERE status='已激活' AND device_total=0",
         ).rowcount
