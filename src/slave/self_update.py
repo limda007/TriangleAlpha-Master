@@ -6,8 +6,9 @@ import binascii
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PosixPath, WindowsPath
 
 from common.protocol import SLAVE_SELF_UPDATE_FILENAME
 from slave.logging_utils import get_logger
@@ -23,6 +24,8 @@ class PreparedSelfUpdate:
     target_path: Path
     pending_path: Path
     helper_path: Path
+    guardian_pid: int | None = None
+    guard_lock_path: Path | None = None
 
 
 def is_self_update_filename(filename: str) -> bool:
@@ -42,10 +45,19 @@ def prepare_self_update(
     pending_path = target_path.with_suffix(f"{target_path.suffix}.pending")
     helper_path = target_path.with_suffix(f"{target_path.suffix}.update.cmd")
     backup_path = target_path.with_suffix(f"{target_path.suffix}.bak")
+    guard_lock_path = _guard_lock_path()
+    guardian_pid = _read_guardian_pid(guard_lock_path, current_pid)
 
     pending_path.write_bytes(raw)
     helper_path.write_text(
-        _build_update_helper_script(target_path, pending_path, backup_path, current_pid),
+        _build_update_helper_script(
+            target_path,
+            pending_path,
+            backup_path,
+            current_pid,
+            guardian_pid=guardian_pid,
+            guard_lock_path=guard_lock_path if guard_lock_path.exists() else None,
+        ),
         encoding="utf-8",
     )
 
@@ -55,6 +67,8 @@ def prepare_self_update(
         target_path=target_path,
         pending_path=pending_path,
         helper_path=helper_path,
+        guardian_pid=guardian_pid,
+        guard_lock_path=guard_lock_path if guard_lock_path.exists() else None,
     )
 
 
@@ -120,11 +134,36 @@ def _resolve_target_executable(base_dir: Path, filename: str, current_executable
     return target
 
 
-def _build_update_helper_script(target: Path, pending: Path, backup: Path, current_pid: int) -> str:
+def _guard_lock_path() -> Path:
+    path_cls = WindowsPath if sys.platform.startswith("win") else PosixPath
+    return path_cls(tempfile.gettempdir()) / "TriangleAlphaSlave.guard.pid"
+
+
+def _read_guardian_pid(lock_path: Path, current_pid: int) -> int | None:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+        pid = int(raw)
+    except (OSError, ValueError):
+        return None
+    if pid <= 0 or pid == current_pid:
+        return None
+    return pid
+
+
+def _build_update_helper_script(
+    target: Path,
+    pending: Path,
+    backup: Path,
+    current_pid: int,
+    *,
+    guardian_pid: int | None = None,
+    guard_lock_path: Path | None = None,
+) -> str:
     target_str = str(target)
     pending_str = str(pending)
     backup_str = str(backup)
     target_dir = str(target.parent)
+    guard_lock_str = str(guard_lock_path) if guard_lock_path is not None else ""
     lines = [
         "@echo off",
         "setlocal enableextensions",
@@ -133,14 +172,34 @@ def _build_update_helper_script(target: Path, pending: Path, backup: Path, curre
         f'set "BACKUP={backup_str}"',
         f'set "TARGET_DIR={target_dir}"',
         f'set "WAIT_PID={current_pid}"',
+        f'set "GUARD_PID={guardian_pid or ""}"',
+        f'set "GUARD_LOCK={guard_lock_str}"',
         'set "PYINSTALLER_RESET_ENVIRONMENT=1"',
         "",
         "for /l %%I in (1,1,120) do (",
         '    tasklist /FI "PID eq %WAIT_PID%" 2^>NUL | find /I "%WAIT_PID%" ^>NUL',
-        "    if errorlevel 1 goto replace",
+        "    if errorlevel 1 goto wait_guard_pid",
         "    timeout /t 1 /nobreak >NUL",
         ")",
         "goto cleanup",
+        "",
+        ":wait_guard_pid",
+        'if not "%GUARD_PID%"=="" (',
+        "    for /l %%I in (1,1,30) do (",
+        '        tasklist /FI "PID eq %GUARD_PID%" 2^>NUL | find /I "%GUARD_PID%" ^>NUL',
+        "        if errorlevel 1 goto wait_guard_lock",
+        "        timeout /t 1 /nobreak >NUL",
+        "    )",
+        ")",
+        "",
+        ":wait_guard_lock",
+        'if not "%GUARD_LOCK%"=="" (',
+        "    for /l %%I in (1,1,15) do (",
+        '        if not exist "%GUARD_LOCK%" goto replace',
+        "        timeout /t 1 /nobreak >NUL",
+        "    )",
+        ")",
+        "goto replace",
         "",
         ":replace",
         "timeout /t 2 /nobreak >NUL",

@@ -310,21 +310,47 @@ class TestM5SelfUpdate:
         exe_path = tmp_path / "nested" / "TriangleAlpha-Slave.exe"
         exe_path.parent.mkdir(parents=True)
         exe_path.write_bytes(b"old")
+        guard_lock_path = tmp_path / "TriangleAlphaSlave.guard.pid"
+        guard_lock_path.write_text("1234", encoding="utf-8")
         encoded = base64.b64encode(b"new-binary").decode("ascii")
 
-        update = prepare_self_update(
-            tmp_path,
-            f"TriangleAlpha-Slave.exe|{encoded}",
-            current_pid=4321,
-            current_executable=exe_path,
-        )
+        with patch("slave.self_update.tempfile.gettempdir", return_value=str(tmp_path)):
+            update = prepare_self_update(
+                tmp_path,
+                f"TriangleAlpha-Slave.exe|{encoded}",
+                current_pid=4321,
+                current_executable=exe_path,
+            )
 
         assert update.pending_path.read_bytes() == b"new-binary"
+        assert update.guardian_pid == 1234
+        assert update.guard_lock_path == guard_lock_path
         helper_text = update.helper_path.read_text(encoding="utf-8")
         assert str(exe_path) in helper_text
         assert str(update.pending_path) in helper_text
         assert "4321" in helper_text
+        assert "GUARD_PID=1234" in helper_text
+        assert "if errorlevel 1 goto wait_guard_pid" in helper_text
+        assert str(guard_lock_path) in helper_text
         assert "PYINSTALLER_RESET_ENVIRONMENT" in helper_text
+
+    def test_prepare_self_update_ignores_same_guard_pid(self, tmp_path):
+        from slave.self_update import prepare_self_update
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"old")
+        (tmp_path / "TriangleAlphaSlave.guard.pid").write_text("4321", encoding="utf-8")
+        encoded = base64.b64encode(b"new-binary").decode("ascii")
+
+        with patch("slave.self_update.tempfile.gettempdir", return_value=str(tmp_path)):
+            update = prepare_self_update(
+                tmp_path,
+                f"TriangleAlpha-Slave.exe|{encoded}",
+                current_pid=4321,
+                current_executable=exe_path,
+            )
+
+        assert update.guardian_pid is None
 
     def test_launch_self_update_helper_resets_pyinstaller_env(self, tmp_path):
         from slave.self_update import PreparedSelfUpdate, launch_self_update_helper
