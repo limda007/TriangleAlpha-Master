@@ -92,6 +92,18 @@ class TestC5SetConfigPathGuard:
         assert Path(dst_arg) == target
         assert Path(src_arg).parent == tmp_path
 
+    def test_binary_update_requests_zone_identifier_cleanup(self, tmp_path):
+        handler = self._handler(tmp_path)
+        target = tmp_path / "TestDemo.exe"
+        payload = "TestDemo.exe|BASE64:" + base64.b64encode(b"new-binary").decode("ascii")
+
+        with patch("slave.command_handler.clear_zone_identifier") as mock_clear:
+            desc = handler._handle_set_config(ParsedTcpCommand(TcpCommand.EXT_SET_CONFIG, payload))
+
+        assert desc == "文件已更新: TestDemo.exe"
+        assert target.read_bytes() == b"new-binary"
+        mock_clear.assert_called_once_with(target)
+
     def test_rejects_traversal_even_without_whitelist(self, tmp_path):
         handler = self._handler(tmp_path)
         payload = "../OtherConsole.exe|BASE64:" + base64.b64encode(b"fake-exe").decode("ascii")
@@ -353,6 +365,27 @@ class TestM5SelfUpdate:
         assert str(guard_lock_path) in helper_text
         assert "PYINSTALLER_RESET_ENVIRONMENT" in helper_text
 
+    def test_prepare_self_update_requests_zone_identifier_cleanup(self, tmp_path):
+        from common.protocol import build_self_update_payload
+        from slave.self_update import prepare_self_update
+
+        exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+        exe_path.write_bytes(b"old")
+        payload = build_self_update_payload("TriangleAlpha-Slave.exe", b"new-binary")
+
+        with (
+            patch("slave.self_update.tempfile.gettempdir", return_value=str(tmp_path)),
+            patch("slave.self_update.clear_zone_identifier") as mock_clear,
+        ):
+            update = prepare_self_update(
+                tmp_path,
+                payload,
+                current_pid=4321,
+                current_executable=exe_path,
+            )
+
+        mock_clear.assert_called_once_with(update.pending_path)
+
     def test_prepare_self_update_ignores_same_guard_pid(self, tmp_path):
         from common.protocol import build_self_update_payload
         from slave.self_update import prepare_self_update
@@ -464,6 +497,36 @@ class TestM5SelfUpdate:
         shutdown_cb.assert_called_once()
 
 
+class TestM5WindowsSecurity:
+    """验证 Windows 文件安全标记清理辅助逻辑。"""
+
+    def test_clear_zone_identifier_ignores_non_windows(self, tmp_path):
+        from slave.windows_security import clear_zone_identifier
+
+        with (
+            patch("slave.windows_security.os.name", "posix"),
+            patch("slave.windows_security.os.remove") as mock_remove,
+        ):
+            result = clear_zone_identifier(tmp_path / "TestDemo.exe")
+
+        assert result is False
+        mock_remove.assert_not_called()
+
+    def test_clear_zone_identifier_removes_ads_on_windows(self, tmp_path):
+        from slave.windows_security import clear_zone_identifier, zone_identifier_path
+
+        target = tmp_path / "TestDemo.exe"
+
+        with (
+            patch("slave.windows_security.os.name", "nt"),
+            patch("slave.windows_security.os.remove") as mock_remove,
+        ):
+            result = clear_zone_identifier(target)
+
+        assert result is True
+        mock_remove.assert_called_once_with(zone_identifier_path(target))
+
+
 # ── H11: Slave 单实例保护 ──
 
 
@@ -553,6 +616,28 @@ class TestH11SlaveSingleInstance:
         mock_exit.assert_called_once_with(0)
         mock_window.assert_not_called()
         mock_backend.assert_not_called()
+        mock_app.exec.assert_not_called()
+
+    def test_run_slave_app_silently_retries_when_child_hits_instance_lock(self, tmp_path):
+        from slave.main import _GUARD_CHILD_BUSY_EXIT_CODE, _run_slave_app
+
+        mock_app = MagicMock()
+
+        with (
+            patch("slave.main.configure_slave_logging"),
+            patch("slave.main._ensure_console_placeholder"),
+            patch("slave.main.QApplication", return_value=mock_app),
+            patch("slave.main._get_base_dir", return_value=tmp_path),
+            patch("slave.main.acquire_instance_lock", return_value=None),
+            patch("slave.main._is_guard_child_mode", return_value=True),
+            patch("slave.main.QMessageBox.warning") as mock_warning,
+            patch("slave.main._notify_guard_stop") as mock_notify,
+        ):
+            result = _run_slave_app()
+
+        assert result == _GUARD_CHILD_BUSY_EXIT_CODE
+        mock_warning.assert_not_called()
+        mock_notify.assert_not_called()
         mock_app.exec.assert_not_called()
 
     def test_main_warns_when_backend_does_not_stop(self, tmp_path, capsys):
@@ -764,3 +849,27 @@ class TestH11SlaveSingleInstance:
 
         assert result == 0
         mock_spawn.assert_not_called()
+
+    def test_run_guardian_quick_retries_when_child_reports_instance_busy(self):
+        from slave.main import _GUARD_CHILD_BUSY_EXIT_CODE, _run_guardian
+
+        child1 = MagicMock()
+        child1.wait.return_value = _GUARD_CHILD_BUSY_EXIT_CODE
+        child2 = MagicMock()
+        child2.wait.return_value = 0
+        mock_lock = MagicMock()
+
+        with (
+            patch("slave.main._should_use_guardian", return_value=True),
+            patch("slave.main.acquire_instance_lock", return_value=mock_lock),
+            patch("slave.main._clear_guard_action"),
+            patch("slave.main._spawn_guarded_child", side_effect=[child1, child2]) as mock_spawn,
+            patch("slave.main._consume_guard_action", side_effect=["", "stop"]),
+            patch("slave.main.time.sleep") as mock_sleep,
+        ):
+            result = _run_guardian(Path("C:/TA/TriangleAlpha-Slave.exe"))
+
+        assert result == 0
+        assert mock_spawn.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+        mock_lock.release.assert_called_once()

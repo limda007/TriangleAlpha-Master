@@ -87,6 +87,8 @@ internal static class Program
 """
 _GUARD_RESTART_DELAY_SEC = 3.0
 _GUARD_MAX_RESTART_DELAY_SEC = 30.0
+_GUARD_CHILD_BUSY_EXIT_CODE = 75
+_GUARD_CHILD_BUSY_DELAY_SEC = 1.0
 
 
 def _get_base_dir() -> Path:
@@ -387,6 +389,11 @@ def _run_guardian(executable_path: Path | None = None) -> int:
             action = _consume_guard_action()
             if action == _GUARD_ACTION_STOP:
                 return exit_code
+            if exit_code == _GUARD_CHILD_BUSY_EXIT_CODE:
+                logger.info("Slave 子进程启动时检测到旧实例仍在退出，%.1fs 后重试", _GUARD_CHILD_BUSY_DELAY_SEC)
+                time.sleep(_GUARD_CHILD_BUSY_DELAY_SEC)
+                restart_delay = _GUARD_RESTART_DELAY_SEC
+                continue
 
             lifetime = time.monotonic() - start_monotonic
             if lifetime >= 60:
@@ -419,7 +426,9 @@ def _run_slave_app() -> int:
     pid_path = Path(tempfile.gettempdir()) / "TriangleAlphaSlave.pid"
     instance_lock = acquire_instance_lock(pid_path)
     if instance_lock is None:
-        _notify_guard_stop()
+        if _is_guard_child_mode():
+            logger.info("检测到旧实例仍在退出，子进程本次启动跳过，等待 guardian 重试")
+            return _GUARD_CHILD_BUSY_EXIT_CODE
         QMessageBox.warning(None, "TA-Slave", "已有实例在运行中，请勿重复启动。")
         return 0
 

@@ -13,6 +13,7 @@ from pathlib import Path, PosixPath, WindowsPath
 
 from common.protocol import SLAVE_SELF_UPDATE_FILENAME
 from slave.logging_utils import get_logger
+from slave.windows_security import clear_zone_identifier
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,7 @@ def prepare_self_update(
     guardian_pid = _read_guardian_pid(guard_lock_path, current_pid)
 
     pending_path.write_bytes(raw)
+    clear_zone_identifier(pending_path)
     helper_path.write_text(
         _build_update_helper_script(
             target_path,

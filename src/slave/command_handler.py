@@ -20,6 +20,7 @@ from common.protocol import (
 from slave.logging_utils import get_logger
 from slave.process_manager import ProcessManager
 from slave.self_update import launch_self_update_helper, prepare_self_update
+from slave.windows_security import clear_zone_identifier
 
 logger = get_logger(__name__)
 
@@ -73,6 +74,7 @@ class CommandHandler:
             with os.fdopen(fd, "wb") as temp_file:
                 temp_file.write(raw)
             os.replace(temp_path, target)
+            clear_zone_identifier(target)
         except Exception:
             try:
                 temp_path.unlink(missing_ok=True)
