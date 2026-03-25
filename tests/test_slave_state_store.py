@@ -5,6 +5,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -447,3 +448,60 @@ class TestIpcPriorityInSnapshot:
         assert data is None
         assert age == float("inf")
         assert backend._last_ipc_jin_bi == "0"
+
+
+class TestNeedAccountRetry:
+    def test_waiting_for_account_detects_requesting_state(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+
+        assert backend._is_waiting_for_account(
+            RuntimeStatus(
+                state=GameState.RUNNING,
+                current_account="",
+                status_text="本地无可用账号，正在向中控申请...",
+            )
+        )
+
+    def test_waiting_for_account_requires_empty_current_account(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+
+        assert not backend._is_waiting_for_account(
+            RuntimeStatus(
+                state=GameState.RUNNING,
+                current_account="user-a",
+                status_text="本地无可用账号，正在向中控申请...",
+            )
+        )
+
+    def test_retry_need_account_respects_cooldown(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+        heartbeat = MagicMock()
+        snapshot = RuntimeStatus(
+            state=GameState.RUNNING,
+            current_account="",
+            status_text="本地无可用账号，正在向中控申请...",
+        )
+
+        assert backend._retry_need_account_if_needed(snapshot, heartbeat, now_monotonic=100.0)
+        assert not backend._retry_need_account_if_needed(snapshot, heartbeat, now_monotonic=105.0)
+        assert backend._retry_need_account_if_needed(snapshot, heartbeat, now_monotonic=116.0)
+        assert heartbeat.send_need_account.call_count == 2
+
+    def test_retry_need_account_resets_after_recovery(self, tmp_path: Path):
+        backend = SlaveBackend(tmp_path, None)
+        heartbeat = MagicMock()
+        waiting = RuntimeStatus(
+            state=GameState.RUNNING,
+            current_account="",
+            status_text="本地无可用账号，正在向中控申请...",
+        )
+        running = RuntimeStatus(
+            state=GameState.RUNNING,
+            current_account="user-a",
+            status_text="运行中",
+        )
+
+        assert backend._retry_need_account_if_needed(waiting, heartbeat, now_monotonic=100.0)
+        assert not backend._retry_need_account_if_needed(running, heartbeat, now_monotonic=101.0)
+        assert backend._retry_need_account_if_needed(waiting, heartbeat, now_monotonic=102.0)
+        assert heartbeat.send_need_account.call_count == 2

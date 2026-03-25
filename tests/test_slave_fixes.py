@@ -5,6 +5,7 @@ import asyncio
 import base64
 import inspect
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from common.protocol import ParsedTcpCommand, TcpCommand
@@ -614,3 +615,64 @@ class TestH11SlaveSingleInstance:
         mock_logging.assert_not_called()
         mock_qapp.assert_not_called()
         mock_exit.assert_called_once_with(0)
+
+    def test_main_uses_guardian_in_packaged_windows_mode(self):
+        import pytest
+
+        from slave.main import main
+
+        with (
+            patch("slave.main.os.name", "nt"),
+            patch("slave.main.sys.frozen", True, create=True),
+            patch("slave.main._is_console_placeholder_mode", return_value=False),
+            patch("slave.main._is_guard_process_mode", return_value=False),
+            patch("slave.main._is_guard_child_mode", return_value=False),
+            patch("slave.main._current_executable_path", return_value=Path("C:/TA/TriangleAlpha-Slave.exe")),
+            patch("slave.main._run_guardian", return_value=0) as mock_guardian,
+            patch("slave.main._run_slave_app") as mock_child,
+            patch("slave.main.sys.exit", side_effect=SystemExit) as mock_exit,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_guardian.assert_called_once()
+        mock_child.assert_not_called()
+        mock_exit.assert_called_once_with(0)
+
+    def test_run_guardian_restarts_child_after_crash(self):
+        from slave.main import _run_guardian
+
+        child1 = MagicMock()
+        child1.wait.return_value = 1
+        child2 = MagicMock()
+        child2.wait.return_value = 0
+        mock_lock = MagicMock()
+
+        with (
+            patch("slave.main._should_use_guardian", return_value=True),
+            patch("slave.main.acquire_instance_lock", return_value=mock_lock),
+            patch("slave.main._clear_guard_action"),
+            patch("slave.main._spawn_guarded_child", side_effect=[child1, child2]) as mock_spawn,
+            patch("slave.main._consume_guard_action", side_effect=["", "stop"]),
+            patch("slave.main.time.monotonic", side_effect=[100.0, 102.0, 200.0, 265.0]),
+            patch("slave.main.time.sleep") as mock_sleep,
+        ):
+            result = _run_guardian(Path("C:/TA/TriangleAlpha-Slave.exe"))
+
+        assert result == 0
+        assert mock_spawn.call_count == 2
+        mock_sleep.assert_called_once_with(3.0)
+        mock_lock.release.assert_called_once()
+
+    def test_run_guardian_returns_when_guard_lock_exists(self):
+        from slave.main import _run_guardian
+
+        with (
+            patch("slave.main._should_use_guardian", return_value=True),
+            patch("slave.main.acquire_instance_lock", return_value=None),
+            patch("slave.main._spawn_guarded_child") as mock_spawn,
+        ):
+            result = _run_guardian(Path("C:/TA/TriangleAlpha-Slave.exe"))
+
+        assert result == 0
+        mock_spawn.assert_not_called()

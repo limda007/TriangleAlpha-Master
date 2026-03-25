@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Generator
 from pathlib import Path
 
@@ -95,6 +96,20 @@ class TestAllocate:
     def test_allocate_no_accounts(self, db: AccountDB) -> None:
         assert db.allocate("VM-01") is None
 
+    def test_allocate_same_machine_returns_existing_account(self, db: AccountDB) -> None:
+        """同一机器重复申请时应返回已绑定账号，而不是继续吃掉新账号。"""
+        db.import_fresh("u1----p1\nu2----p2")
+
+        first = db.allocate("VM-01")
+        second = db.allocate("VM-01")
+
+        assert first is not None
+        assert second is not None
+        assert first.username == "u1"
+        assert second.username == "u1"
+        assert db.available_count == 1
+        assert db.in_use_count == 1
+
 
 class TestComplete:
     def test_complete_basic(self, db: AccountDB) -> None:
@@ -132,6 +147,19 @@ class TestComplete:
         acc = db.get_all_accounts()[0]
         assert acc.status == AccountStatus.COMPLETED
         assert acc.completed_at is not None
+
+    def test_update_from_status_auto_bind_does_not_steal_running_account(self, db: AccountDB) -> None:
+        """自动绑定不能把别的机器正在跑的账号改绑走。"""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+
+        db.update_from_status("VM-02", 10, "5000", "运行中", current_account="u1")
+
+        acc_vm1 = db.get_account_for_machine("VM-01")
+        acc_vm2 = db.get_account_for_machine("VM-02")
+        assert acc_vm1 is not None
+        assert acc_vm1.username == "u1"
+        assert acc_vm2 is None
 
 
     def test_update_from_status_zero_level_does_not_overwrite(self, db: AccountDB) -> None:
@@ -292,6 +320,68 @@ class TestPersistence:
         assert accs[0].level == 25
         assert accs[0].completed_at is not None
         db2.close()
+
+    def test_reopen_allocate_same_machine_returns_existing_account(self, tmp_path: Path) -> None:
+        """不同连接访问同一 DB 时，同一机器重复取号也不能拿到第二个账号。"""
+        db_path = tmp_path / "persist3.db"
+        db1 = AccountDB(db_path)
+        db1.import_fresh("u1----p1\nu2----p2")
+        db2 = AccountDB(db_path)
+        try:
+            first = db1.allocate("VM-01")
+            second = db2.allocate("VM-01")
+
+            assert first is not None
+            assert second is not None
+            assert first.username == "u1"
+            assert second.username == "u1"
+            assert db2.get_account_for_machine("VM-01") is not None
+            assert db2.get_account_for_machine("VM-02") is None
+            assert len([acc for acc in db2.get_all_accounts() if acc.assigned_machine == "VM-01"]) == 1
+        finally:
+            db2.close()
+            db1.close()
+
+    def test_concurrent_allocate_same_machine_does_not_consume_second_account(self, tmp_path: Path) -> None:
+        """并发取号时，同一机器也只能绑定一个账号。"""
+        db_path = tmp_path / "persist4.db"
+        setup = AccountDB(db_path)
+        setup.import_fresh("u1----p1\nu2----p2")
+        setup.close()
+
+        barrier = threading.Barrier(2)
+        results: list[str | None] = []
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            local_db = AccountDB(db_path)
+            try:
+                barrier.wait(timeout=5)
+                acc = local_db.allocate("VM-01")
+                results.append(acc.username if acc else None)
+            except BaseException as err:  # noqa: BLE001
+                errors.append(err)
+            finally:
+                local_db.close()
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors
+        assert results.count("u1") == 2
+
+        verify = AccountDB(db_path)
+        try:
+            running = [acc.username for acc in verify.get_all_accounts() if acc.assigned_machine == "VM-01"]
+            assert running == ["u1"]
+            assert verify.available_count == 1
+            assert verify.in_use_count == 1
+        finally:
+            verify.close()
 
 
 class TestMigration:

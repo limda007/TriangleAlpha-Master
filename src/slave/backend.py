@@ -30,6 +30,9 @@ logger = get_logger(__name__)
 class SlaveBackend(QThread):
     """在独立线程中运行所有 asyncio 后台服务。"""
 
+    _NEED_ACCOUNT_RETRY_SEC = 15.0
+    _NEED_ACCOUNT_STATUS_KEYWORDS = ("本地无可用账号", "向中控申请", "申请账号", "请求账号")
+
     heartbeat_sent = pyqtSignal(int, float, float)
     command_received = pyqtSignal(str)
     account_updated = pyqtSignal(int)
@@ -51,6 +54,7 @@ class SlaveBackend(QThread):
         self._script_started_at: float | None = None
         self._ipc = LocalIpcReceiver()
         self._last_ipc_jin_bi: str = "0"  # IPC 金币高水位缓存，防止回退时暴降
+        self._last_need_account_request_at: float = 0.0
 
     def run(self) -> None:
         """QThread 入口。"""
@@ -137,6 +141,7 @@ class SlaveBackend(QThread):
         # 新账号下发后立即丢弃本地旧运行态，避免旧号通过磁盘/IPC 缓存回流。
         self._state_store.clear_runtime_status()
         self._last_ipc_jin_bi = "0"
+        self._last_need_account_request_at = 0.0
         self._ipc.clear_snapshot()
         self.account_updated.emit(count)
 
@@ -312,7 +317,43 @@ class SlaveBackend(QThread):
                     )
                 except Exception:
                     logger.exception("周期性状态上报失败")
+                try:
+                    self._retry_need_account_if_needed(snapshot, self._heartbeat)
+                except Exception:
+                    logger.exception("补发 NEED_ACCOUNT 失败")
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+    @classmethod
+    def _is_waiting_for_account(cls, snapshot: RuntimeStatus) -> bool:
+        if snapshot.state != GameState.RUNNING:
+            return False
+        if snapshot.current_account.strip():
+            return False
+        status_text = snapshot.status_text.strip()
+        if not status_text:
+            return False
+        return any(keyword in status_text for keyword in cls._NEED_ACCOUNT_STATUS_KEYWORDS)
+
+    def _retry_need_account_if_needed(
+        self,
+        snapshot: RuntimeStatus,
+        heartbeat: HeartbeatService,
+        *,
+        now_monotonic: float | None = None,
+    ) -> bool:
+        if not self._is_waiting_for_account(snapshot):
+            self._last_need_account_request_at = 0.0
+            return False
+        now = time.monotonic() if now_monotonic is None else now_monotonic
+        if (
+            self._last_need_account_request_at > 0
+            and now - self._last_need_account_request_at < self._NEED_ACCOUNT_RETRY_SEC
+        ):
+            return False
+        heartbeat.send_need_account()
+        self._last_need_account_request_at = now
+        logger.info("检测到等待账号状态，补发 NEED_ACCOUNT")
+        return True
 
     def _load_runtime_snapshot(self) -> RuntimeStatus:
         default_elapsed = "0"

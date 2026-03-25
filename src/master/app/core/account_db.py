@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -60,6 +62,8 @@ class AccountDB(QObject):
     """
 
     pool_changed = pyqtSignal()
+    _path_locks: ClassVar[dict[str, threading.RLock]] = {}
+    _path_locks_guard: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, db_path: str | Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -67,6 +71,7 @@ class AccountDB(QObject):
         self._conn = sqlite3.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._write_lock = self._get_write_lock(self._db_path)
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
         # 迁移：修正旧版状态值
@@ -170,19 +175,32 @@ class AccountDB(QObject):
     # ── 分配 / 回收 ───────────────────────────────────────
 
     def allocate(self, machine_name: str) -> AccountInfo | None:
-        """取第一个空闲账号绑定到机器，原子操作"""
-        cur = self._conn.execute(
-            "UPDATE accounts SET status='运行中', assigned_machine=? "
-            "WHERE id = (SELECT id FROM accounts WHERE status='空闲中' ORDER BY id LIMIT 1) "
-            "RETURNING *",
-            (machine_name,),
-        )
-        row = cur.fetchone()
+        """为机器分配账号；若该机器已有运行中账号则直接返回原绑定。"""
+        machine = machine_name.strip()
+        if not machine:
+            return None
+
+        changed = False
+        with self._write_transaction():
+            row = self._conn.execute(
+                "SELECT * FROM accounts "
+                "WHERE assigned_machine=? AND status='运行中' "
+                "ORDER BY id LIMIT 1",
+                (machine,),
+            ).fetchone()
+            if row is None:
+                row = self._conn.execute(
+                    "UPDATE accounts SET status='运行中', assigned_machine=? "
+                    "WHERE id = (SELECT id FROM accounts WHERE status='空闲中' ORDER BY id LIMIT 1) "
+                    "RETURNING *",
+                    (machine,),
+                ).fetchone()
+                changed = row is not None
         if row is None:
             return None
-        self._conn.commit()
-        self._refresh_counts()
-        self.pool_changed.emit()
+        if changed:
+            self._refresh_counts()
+            self.pool_changed.emit()
         return self._row_to_info(row)
 
     def complete(self, machine_name: str, level: int = 0) -> None:
@@ -245,16 +263,18 @@ class AccountDB(QObject):
                     "UPDATE accounts SET level=MAX(level, ?), jin_bi=?, "
                     "status='运行中', assigned_machine=?, "
                     "last_login_at=COALESCE(last_login_at, ?) "
-                    "WHERE username=? AND status IN ('空闲中', '运行中')",
-                    (level, jin_bi, machine_name, login_at_val, current_account),
+                    "WHERE username=? AND (status='空闲中' "
+                    "OR (status='运行中' AND assigned_machine IN ('', ?)))",
+                    (level, jin_bi, machine_name, login_at_val, current_account, machine_name),
                 ).rowcount
             else:
                 changed = self._conn.execute(
                     "UPDATE accounts SET level=MAX(level, ?), "
                     "status='运行中', assigned_machine=?, "
                     "last_login_at=COALESCE(last_login_at, ?) "
-                    "WHERE username=? AND status IN ('空闲中', '运行中')",
-                    (level, machine_name, login_at_val, current_account),
+                    "WHERE username=? AND (status='空闲中' "
+                    "OR (status='运行中' AND assigned_machine IN ('', ?)))",
+                    (level, machine_name, login_at_val, current_account, machine_name),
                 ).rowcount
         if not changed:
             return
@@ -393,7 +413,8 @@ class AccountDB(QObject):
     def get_account_for_machine(self, machine_name: str) -> AccountInfo | None:
         """查已绑定的运行中账号"""
         cur = self._conn.execute(
-            "SELECT * FROM accounts WHERE assigned_machine=? AND status='运行中'",
+            "SELECT * FROM accounts WHERE assigned_machine=? AND status='运行中' "
+            "ORDER BY id LIMIT 1",
             (machine_name,),
         )
         row = cur.fetchone()
@@ -537,6 +558,27 @@ class AccountDB(QObject):
         return self._completed
 
     # ── 内部方法 ───────────────────────────────────────────
+
+    @classmethod
+    def _get_write_lock(cls, db_path: str) -> threading.RLock:
+        with cls._path_locks_guard:
+            lock = cls._path_locks.get(db_path)
+            if lock is None:
+                lock = threading.RLock()
+                cls._path_locks[db_path] = lock
+            return lock
+
+    @contextlib.contextmanager
+    def _write_transaction(self):
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                yield
+            except Exception:
+                self._conn.rollback()
+                raise
+            else:
+                self._conn.commit()
 
     def _ensure_uploaded_at_column(self) -> None:
         """迁移：为已有数据库添加 uploaded_at 列"""

@@ -21,6 +21,9 @@ from slave.slave_window import SlaveWindow
 
 logger = get_logger(__name__)
 SLAVE_CLIENT_CONSOLE_FILENAME = "SlaveClientConsole.exe"
+_SLAVE_CHILD_FLAG = "--child"
+_SLAVE_GUARD_FLAG = "--guard"
+_GUARD_ACTION_STOP = "stop"
 _CONSOLE_PLACEHOLDER_POLL_SEC = 2.0
 _CONSOLE_PLACEHOLDER_MAX_WAIT_SEC = 12 * 60 * 60
 _CONSOLE_PLACEHOLDER_MAX_SIZE = 1024 * 1024
@@ -82,6 +85,8 @@ internal static class Program
     }
 }
 """
+_GUARD_RESTART_DELAY_SEC = 3.0
+_GUARD_MAX_RESTART_DELAY_SEC = 30.0
 
 
 def _get_base_dir() -> Path:
@@ -91,6 +96,65 @@ def _get_base_dir() -> Path:
 
 def _is_real_qt_app(app: object) -> bool:
     return app.__class__.__module__.startswith("PyQt6.")
+
+
+def _guard_lock_path() -> Path:
+    return Path(tempfile.gettempdir()) / "TriangleAlphaSlave.guard.pid"
+
+
+def _guard_action_path() -> Path:
+    return Path(tempfile.gettempdir()) / "TriangleAlphaSlave.guard.action"
+
+
+def _should_use_guardian() -> bool:
+    return os.name == "nt" and bool(getattr(sys, "frozen", False))
+
+
+def _is_guard_child_mode() -> bool:
+    return _SLAVE_CHILD_FLAG in sys.argv
+
+
+def _is_guard_process_mode() -> bool:
+    return _SLAVE_GUARD_FLAG in sys.argv
+
+
+def _build_child_spawn_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for key in list(env):
+        if key.startswith("_PYI_"):
+            env.pop(key, None)
+    return env
+
+
+def _write_guard_action(action: str) -> None:
+    _guard_action_path().write_text(action, encoding="utf-8")
+
+
+def _consume_guard_action() -> str:
+    action_path = _guard_action_path()
+    try:
+        action = action_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        logger.exception("读取守护动作失败: %s", action_path)
+        return ""
+    with contextlib.suppress(OSError):
+        action_path.unlink()
+    return action
+
+
+def _clear_guard_action() -> None:
+    with contextlib.suppress(OSError):
+        _guard_action_path().unlink()
+
+
+def _notify_guard_stop() -> None:
+    if not _is_guard_child_mode():
+        return
+    with contextlib.suppress(OSError):
+        _write_guard_action(_GUARD_ACTION_STOP)
 
 
 class InstanceLock:
@@ -275,21 +339,76 @@ def _run_console_placeholder(
     return 0
 
 
-def main() -> None:
-    # --uninstall: 自清理后退出
-    if "--uninstall" in sys.argv:
-        from slave.auto_setup import uninstall
-        uninstall()
-        print("卸载清理完成")
-        sys.exit(0)
+def _spawn_guarded_child(executable_path: Path) -> subprocess.Popen[bytes]:
+    creation_flags = (
+        getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
+    return subprocess.Popen(  # noqa: S603
+        [str(executable_path), _SLAVE_CHILD_FLAG],
+        cwd=str(executable_path.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=creation_flags,
+        env=_build_child_spawn_env(),
+    )
 
-    if _is_console_placeholder_mode():
-        sys.exit(_run_console_placeholder())
 
+def _run_guardian(executable_path: Path | None = None) -> int:
+    if not _should_use_guardian():
+        return _run_slave_app()
+
+    current_executable = executable_path if executable_path is not None else _current_executable_path()
+    if current_executable is None:
+        logger.error("无法确定当前 slave 可执行文件路径，跳过守护模式")
+        return _run_slave_app()
+
+    guard_lock = acquire_instance_lock(_guard_lock_path())
+    if guard_lock is None:
+        return 0
+
+    restart_delay = _GUARD_RESTART_DELAY_SEC
+    try:
+        while True:
+            _clear_guard_action()
+            start_monotonic = time.monotonic()
+            try:
+                child = _spawn_guarded_child(current_executable)
+            except OSError:
+                logger.exception("启动 slave 子进程失败")
+                time.sleep(restart_delay)
+                restart_delay = min(restart_delay * 2, _GUARD_MAX_RESTART_DELAY_SEC)
+                continue
+
+            exit_code = child.wait()
+            action = _consume_guard_action()
+            if action == _GUARD_ACTION_STOP:
+                return exit_code
+
+            lifetime = time.monotonic() - start_monotonic
+            if lifetime >= 60:
+                restart_delay = _GUARD_RESTART_DELAY_SEC
+            logger.warning(
+                "Slave 子进程异常退出: exit_code=%s lifetime=%.1fs，%ss 后重启",
+                exit_code,
+                lifetime,
+                restart_delay,
+            )
+            time.sleep(restart_delay)
+            restart_delay = min(restart_delay * 2, _GUARD_MAX_RESTART_DELAY_SEC)
+    finally:
+        guard_lock.release()
+
+
+def _run_slave_app() -> int:
     configure_slave_logging()
     _ensure_console_placeholder()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 托盘模式
+    app.aboutToQuit.connect(_notify_guard_stop)  # type: ignore[union-attr]
     icon_path = RESOURCE_DIR / "icon.png"
     if icon_path.exists() and _is_real_qt_app(app):
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -300,8 +419,9 @@ def main() -> None:
     pid_path = Path(tempfile.gettempdir()) / "TriangleAlphaSlave.pid"
     instance_lock = acquire_instance_lock(pid_path)
     if instance_lock is None:
+        _notify_guard_stop()
         QMessageBox.warning(None, "TA-Slave", "已有实例在运行中，请勿重复启动。")
-        sys.exit(0)
+        return 0
 
     master_ip = _read_master_ip(base_dir)
 
@@ -322,13 +442,28 @@ def main() -> None:
     # 启动时直接最小化到托盘，不弹出窗口
 
     try:
-        exit_code = app.exec()
+        return int(app.exec())
     finally:
         backend.stop()
         if not backend.wait(5000):
             logger.warning("SlaveBackend 未在 5 秒内停止")
         instance_lock.release()
-    sys.exit(exit_code)
+
+
+def main() -> None:
+    # --uninstall: 自清理后退出
+    if "--uninstall" in sys.argv:
+        from slave.auto_setup import uninstall
+        uninstall()
+        print("卸载清理完成")
+        sys.exit(0)
+
+    if _is_console_placeholder_mode():
+        sys.exit(_run_console_placeholder())
+    current_executable = _current_executable_path()
+    if _is_guard_process_mode() or (_should_use_guardian() and not _is_guard_child_mode()):
+        sys.exit(_run_guardian(current_executable))
+    sys.exit(_run_slave_app())
 
 
 if __name__ == "__main__":

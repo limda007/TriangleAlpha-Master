@@ -513,6 +513,140 @@ class TestCompletedStatusCleanup:
             db.close()
 
 
+class TestMissedNeedAccountRemediation:
+    """验证漏收 NEED_ACCOUNT 后，主控能基于状态文案补发账号。"""
+
+    def test_waiting_status_triggers_account_remediation(self, tmp_path) -> None:
+        from master.app.view.main_window import MainWindow
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            db.import_fresh("u1----p1")
+            expected_payload = AccountInfo.from_line("u1----p1").to_line()
+
+            fake = type("FakeMainWindow", (), {})()
+            fake.nodeManager = NodeManager()
+            fake.accountPool = db
+            fake.tcpCommander = MagicMock()
+            fake._completed_cleanup_sent = {}
+            fake._account_retry_sent_at = {}
+            fake._ACCOUNT_RETRY_SEC = 10
+            fake._onNeedAccount = MainWindow._onNeedAccount.__get__(fake, type(fake))
+            fake._needs_account_remediation = MainWindow._needs_account_remediation.__get__(
+                fake, type(fake)
+            )
+            fake._retry_missed_account_request = MainWindow._retry_missed_account_request.__get__(
+                fake, type(fake)
+            )
+
+            fake.nodeManager.nodes["VM-01"] = NodeInfo(
+                machine_name="VM-01",
+                ip="10.0.0.1",
+                game_state=GameState.RUNNING,
+                status_text="本地无可用账号，正在向中控申请...",
+            )
+
+            with patch("master.app.view.main_window.time.monotonic", return_value=100.0):
+                MainWindow._retry_missed_account_request(fake, "VM-01")
+
+            fake.tcpCommander.send.assert_called_once_with(
+                "10.0.0.1",
+                TcpCommand.UPDATE_TXT,
+                expected_payload,
+            )
+            bound = db.get_account_for_machine("VM-01")
+            assert bound is not None
+            assert bound.username == "u1"
+        finally:
+            db.close()
+
+    def test_waiting_status_is_throttled_but_retries_after_cooldown(self, tmp_path) -> None:
+        from master.app.view.main_window import MainWindow
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            db.import_fresh("u1----p1")
+            expected_payload = AccountInfo.from_line("u1----p1").to_line()
+
+            fake = type("FakeMainWindow", (), {})()
+            fake.nodeManager = NodeManager()
+            fake.accountPool = db
+            fake.tcpCommander = MagicMock()
+            fake._completed_cleanup_sent = {}
+            fake._account_retry_sent_at = {}
+            fake._ACCOUNT_RETRY_SEC = 10
+            fake._onNeedAccount = MainWindow._onNeedAccount.__get__(fake, type(fake))
+            fake._needs_account_remediation = MainWindow._needs_account_remediation.__get__(
+                fake, type(fake)
+            )
+            fake._retry_missed_account_request = MainWindow._retry_missed_account_request.__get__(
+                fake, type(fake)
+            )
+
+            fake.nodeManager.nodes["VM-01"] = NodeInfo(
+                machine_name="VM-01",
+                ip="10.0.0.1",
+                game_state=GameState.RUNNING,
+                status_text="本地无可用账号，正在向中控申请...",
+            )
+
+            with patch("master.app.view.main_window.time.monotonic", side_effect=[100.0, 100.0, 111.0]):
+                MainWindow._retry_missed_account_request(fake, "VM-01")
+                MainWindow._retry_missed_account_request(fake, "VM-01")
+                MainWindow._retry_missed_account_request(fake, "VM-01")
+
+            assert fake.tcpCommander.send.call_count == 2
+            fake.tcpCommander.send.assert_any_call(
+                "10.0.0.1",
+                TcpCommand.UPDATE_TXT,
+                expected_payload,
+            )
+        finally:
+            db.close()
+
+    def test_waiting_status_with_stale_current_account_still_retries(self, tmp_path) -> None:
+        from master.app.view.main_window import MainWindow
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            db.import_fresh("u1----p1")
+            expected_payload = AccountInfo.from_line("u1----p1").to_line()
+
+            fake = type("FakeMainWindow", (), {})()
+            fake.nodeManager = NodeManager()
+            fake.accountPool = db
+            fake.tcpCommander = MagicMock()
+            fake._completed_cleanup_sent = {}
+            fake._account_retry_sent_at = {}
+            fake._ACCOUNT_RETRY_SEC = 10
+            fake._onNeedAccount = MainWindow._onNeedAccount.__get__(fake, type(fake))
+            fake._needs_account_remediation = MainWindow._needs_account_remediation.__get__(
+                fake, type(fake)
+            )
+            fake._retry_missed_account_request = MainWindow._retry_missed_account_request.__get__(
+                fake, type(fake)
+            )
+
+            fake.nodeManager.nodes["VM-01"] = NodeInfo(
+                machine_name="VM-01",
+                ip="10.0.0.1",
+                current_account="old-user",
+                game_state=GameState.RUNNING,
+                status_text="本地无可用账号，正在向中控申请...",
+            )
+
+            with patch("master.app.view.main_window.time.monotonic", return_value=100.0):
+                MainWindow._retry_missed_account_request(fake, "VM-01")
+
+            fake.tcpCommander.send.assert_called_once_with(
+                "10.0.0.1",
+                TcpCommand.UPDATE_TXT,
+                expected_payload,
+            )
+        finally:
+            db.close()
+
+
 # ── M1-fix: LogReceiver 并发处理连接 ──
 
 

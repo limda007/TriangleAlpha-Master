@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition
 
+from common.models import NodeInfo
 from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, GameState, TcpCommand
 from master.app.common.config import RESOURCE_DIR, cfg
 from master.app.core.account_db import AccountDB
@@ -28,6 +29,8 @@ from master.app.view.history_interface import HistoryInterface
 from master.app.view.kami_interface import KamiInterface
 from master.app.view.log_interface import LogInterface
 from master.app.view.setting_interface import SettingInterface
+
+_ACCOUNT_REQUEST_STATUS_HINTS = ("向中控申请", "申请账号", "无可用账号")
 
 
 def _get_db_path() -> Path:
@@ -91,6 +94,9 @@ class MainWindow(FluentWindow):
 
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
         self.nodeManager.node_status_reported.connect(self._syncAccountFromNode)
+        self._account_retry_sent_at: dict[str, float] = {}
+        self._ACCOUNT_RETRY_SEC = 10
+        self.nodeManager.node_status_reported.connect(self._retry_missed_account_request)
 
         # slave ACCOUNT_SYNC → 批量 upsert 账号到 AccountDB
         self.nodeManager.account_sync_received.connect(self._onAccountSync)
@@ -286,6 +292,34 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         threshold = int(node.level_threshold) if node and node.level_threshold.isdigit() else 0
         self.accountPool.upsert_from_sync(machine_name, accounts, level_threshold=threshold)
+
+    def _needs_account_remediation(self, node: NodeInfo) -> bool:
+        """根据节点状态判断是否需要补发账号。"""
+        if node.status in ("离线", "断连"):
+            return False
+        status_text = node.status_text.strip()
+        if not status_text or not any(hint in status_text for hint in _ACCOUNT_REQUEST_STATUS_HINTS):
+            return False
+        bound = self.accountPool.get_account_for_machine(node.machine_name)
+        if bound is None:
+            return True
+        current_account = node.current_account.strip()
+        return not current_account or current_account != bound.username
+
+    def _retry_missed_account_request(self, machine_name: str) -> None:
+        """漏收 NEED_ACCOUNT 时，基于 STATUS 文案补发账号。"""
+        node = self.nodeManager.nodes.get(machine_name)
+        if node is None:
+            return
+        if not self._needs_account_remediation(node):
+            self._account_retry_sent_at.pop(machine_name, None)
+            return
+        now = time.monotonic()
+        last_retry = self._account_retry_sent_at.get(machine_name)
+        if last_retry is not None and now - last_retry < self._ACCOUNT_RETRY_SEC:
+            return
+        self._account_retry_sent_at[machine_name] = now
+        self._onNeedAccount(machine_name)
 
     def _onNeedAccount(self, machine_name: str) -> None:
         """TestDemo NEED_ACCOUNT → 自动分配账号并下发。

@@ -172,6 +172,10 @@ def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:
     return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}"
 
 
+def build_udp_need_account(machine_name: str) -> str:
+    return f"NEED_ACCOUNT|{machine_name}"
+
+
 def build_udp_need_kami(machine_name: str) -> str:
     return f"NEED_KAMI|{machine_name}"
 

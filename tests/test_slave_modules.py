@@ -5,7 +5,7 @@ import platform
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from common.protocol import UdpMessageType, build_udp_ext_online, parse_udp_message
+from common.protocol import UdpMessageType, build_udp_ext_online, build_udp_need_account, parse_udp_message
 from slave.heartbeat import HeartbeatService
 from slave.process_manager import ProcessManager
 
@@ -34,6 +34,21 @@ class TestHeartbeatService:
         assert svc._master_ip == "192.168.1.100"
         assert svc._port == 9999
         assert svc._interval == 5
+
+    def test_builds_valid_need_account_message(self):
+        msg_str = build_udp_need_account("VM-01")
+        parsed = parse_udp_message(msg_str)
+        assert parsed is not None
+        assert parsed.type == UdpMessageType.NEED_ACCOUNT
+        assert parsed.machine_name == "VM-01"
+
+    def test_send_need_account_uses_udp_sender(self):
+        svc = HeartbeatService()
+        svc._send_udp = MagicMock()
+
+        svc.send_need_account()
+
+        svc._send_udp.assert_called_once_with(build_udp_need_account(svc.machine_name))
 
     def test_stop_sets_running_false(self):
         svc = HeartbeatService()

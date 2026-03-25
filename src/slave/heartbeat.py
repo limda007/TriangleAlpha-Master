@@ -16,6 +16,7 @@ from common.protocol import (
     UDP_PORT,
     build_udp_account_sync,
     build_udp_ext_online,
+    build_udp_need_account,
     build_udp_need_kami,
     build_udp_offline,
     build_udp_status,
@@ -70,6 +71,12 @@ class HeartbeatService:
         """发送 ACCOUNT_SYNC 消息到 master。"""
         msg = build_udp_account_sync(self._machine_name, payload_b64)
         self._send_udp(msg)
+
+    def send_need_account(self) -> None:
+        """发送 NEED_ACCOUNT 请求到 master。"""
+        msg = build_udp_need_account(self._machine_name)
+        self._send_udp(msg)
+        logger.info("已发送 NEED_ACCOUNT 请求")
 
     def send_need_kami(self) -> None:
         """发送 NEED_KAMI 请求到 master。"""
