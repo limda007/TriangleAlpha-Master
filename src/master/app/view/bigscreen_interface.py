@@ -1394,14 +1394,14 @@ class BigScreenInterface(ScrollArea):
             Action(
                 FIF.COPY,
                 copy_ip_label,
-                triggered=lambda nodes=target_nodes: self._copyNodeIPs(nodes),
+                triggered=lambda _checked=False, nodes=target_nodes: self._copyNodeIPs(nodes),
             )
         )
         menu.addAction(
             Action(
                 FIF.COPY,
                 copy_name_label,
-                triggered=lambda nodes=target_nodes: self._copyNodeNames(nodes),
+                triggered=lambda _checked=False, nodes=target_nodes: self._copyNodeNames(nodes),
             )
         )
         menu.addSeparator()
@@ -1412,7 +1412,7 @@ class BigScreenInterface(ScrollArea):
                 Action(
                     FIF.PLAY_SOLID,
                     f"启动/重启脚本{scope_suffix}",
-                    triggered=lambda nodes=online_nodes: self._sendCmdToNodes(
+                    triggered=lambda _checked=False, nodes=online_nodes: self._sendCmdToNodes(
                         nodes, TcpCommand.START_EXE, "启动脚本"
                     ),
                 )
@@ -1421,7 +1421,7 @@ class BigScreenInterface(ScrollArea):
                 Action(
                     FIF.CLOSE,
                     f"停止脚本游戏{scope_suffix}",
-                    triggered=lambda nodes=online_nodes: self._sendCmdToNodes(
+                    triggered=lambda _checked=False, nodes=online_nodes: self._sendCmdToNodes(
                         nodes, TcpCommand.STOP_EXE, "停止脚本"
                     ),
                 )
@@ -1431,7 +1431,7 @@ class BigScreenInterface(ScrollArea):
                 Action(
                     FIF.POWER_BUTTON,
                     f"重启电脑{scope_suffix}",
-                    triggered=lambda nodes=online_nodes: self._rebootNodes(nodes),
+                    triggered=lambda _checked=False, nodes=online_nodes: self._rebootNodes(nodes),
                 )
             )
             menu.addSeparator()
@@ -1450,7 +1450,7 @@ class BigScreenInterface(ScrollArea):
                     Action(
                         FIF.REMOVE,
                         label,
-                        triggered=lambda nodes=bound_nodes: self._releaseNodeAccounts(nodes),
+                        triggered=lambda _checked=False, nodes=bound_nodes: self._releaseNodeAccounts(nodes),
                     )
                 )
             if unbound_nodes:
@@ -1462,7 +1462,7 @@ class BigScreenInterface(ScrollArea):
                     Action(
                         FIF.ADD,
                         label,
-                        triggered=lambda nodes=unbound_nodes: self._allocateNodeAccounts(nodes),
+                        triggered=lambda _checked=False, nodes=unbound_nodes: self._allocateNodeAccounts(nodes),
                     )
                 )
 
@@ -1471,7 +1471,7 @@ class BigScreenInterface(ScrollArea):
                 Action(
                     FIF.TAG,
                     f"设置分组{scope_suffix}",
-                    triggered=lambda nodes=online_nodes: self._setNodeGroupForNodes(nodes),
+                    triggered=lambda _checked=False, nodes=online_nodes: self._setNodeGroupForNodes(nodes),
                 )
             )
 
@@ -1482,7 +1482,7 @@ class BigScreenInterface(ScrollArea):
                     Action(
                         FIF.LABEL,
                         f"分配/重发卡密{scope_suffix}",
-                        triggered=lambda nodes=online_nodes: self._assignKamiToNodes(nodes),
+                        triggered=lambda _checked=False, nodes=online_nodes: self._assignKamiToNodes(nodes),
                     )
                 )
 

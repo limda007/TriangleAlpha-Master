@@ -374,20 +374,20 @@ class KamiInterface(ScrollArea):
         if status_val == "已激活":
             menu.addAction(Action(
                 FIF.SEND, "分配到节点",
-                triggered=lambda kid=kami_id: self._assignToNode(kid),
+                triggered=lambda _checked=False, kid=kami_id: self._assignToNode(kid),
             ))
         # 解绑节点
         nodes_item = self.table.item(row, 2)
         if nodes_item and nodes_item.text() != "-":
             menu.addAction(Action(
                 FIF.REMOVE, "解绑节点",
-                triggered=lambda kid=kami_id: self._unbindFromNode(kid),
+                triggered=lambda _checked=False, kid=kami_id: self._unbindFromNode(kid),
             ))
         menu.addSeparator()
         # 删除
         menu.addAction(Action(
             FIF.DELETE, "删除",
-            triggered=lambda kid=kami_id: self._deleteSingle(kid),
+            triggered=lambda _checked=False, kid=kami_id: self._deleteSingle(kid),
         ))
         menu.exec(
             self.table.viewport().mapToGlobal(pos),

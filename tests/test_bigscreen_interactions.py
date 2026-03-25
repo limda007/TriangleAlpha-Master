@@ -15,6 +15,7 @@ from common.models import NodeInfo
 from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, TcpCommand, build_self_update_payload
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
+from master.app.core.kami_db import KamiDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
 from master.app.view.bigscreen_interface import BigScreenInterface, _supports_self_update_hash_payload
@@ -101,6 +102,61 @@ def test_context_menu_prefers_selected_rows(bigscreen, qapp: QApplication) -> No
     nodes, selected = widget._getContextMenuNodes(2)
     assert selected is False
     assert [node.machine_name for node in nodes] == ["VM-03"]
+
+
+def test_context_menu_assign_kami_action_keeps_selected_nodes(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    widget, node_manager, _commander, account_db = bigscreen
+    kami_db = KamiDB(account_db._db_path)
+    widget._kami_db = kami_db
+    node_manager.nodes["VM-01"] = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    widget._refreshNodeTable()
+    qapp.processEvents()
+
+    captured_menus: list[FakeMenu] = []
+
+    class FakeAction:
+        def __init__(self, _icon, text: str, triggered):
+            self.text = text
+            self.triggered = triggered
+
+    class FakeMenu:
+        def __init__(self, parent=None) -> None:
+            self.parent = parent
+            self.actions: list[FakeAction] = []
+            captured_menus.append(self)
+
+        def addAction(self, action: FakeAction) -> None:
+            self.actions.append(action)
+
+        def addSeparator(self) -> None:
+            return
+
+        def exec(self, *_args, **_kwargs) -> None:
+            return
+
+    assign_mock = MagicMock()
+    monkeypatch.setattr("master.app.view.bigscreen_interface.Action", FakeAction)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.RoundMenu", FakeMenu)
+    monkeypatch.setattr(widget, "_assignKamiToNodes", assign_mock)
+
+    pos = widget.table.visualItemRect(widget.table.item(0, 0)).center()
+    widget._showNodeContextMenu(pos)
+
+    assert captured_menus
+    assign_action = next(
+        action
+        for action in captured_menus[0].actions
+        if action.text.startswith("分配/重发卡密")
+    )
+
+    assign_action.triggered(False)
+
+    assign_mock.assert_called_once_with([node_manager.nodes["VM-01"]])
+    kami_db.close()
 
 
 def test_send_cmd_to_nodes_broadcasts_selected_nodes(
