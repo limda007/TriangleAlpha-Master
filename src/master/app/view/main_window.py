@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition
 
-from common.protocol import TcpCommand
+from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, GameState, TcpCommand
 from master.app.common.config import RESOURCE_DIR, cfg
 from master.app.core.account_db import AccountDB
 from master.app.core.kami_db import KamiDB
@@ -86,6 +86,7 @@ class MainWindow(FluentWindow):
         # 节点上报时自动补全缺失的验证码 Key
         self._tokenPushedAt: dict[str, float] = {}  # machine_name → monotonic timestamp
         self._TOKEN_PUSH_RETRY_SEC = 30  # 推送后 N 秒内 key 仍不匹配则允许重试
+        self._completed_cleanup_sent: dict[str, str] = {}
         self.nodeManager.node_updated.connect(self._autoFixTokenKey)
 
         # slave STATUS 上报 → 同步等级/金币/状态到 AccountDB
@@ -219,6 +220,7 @@ class MainWindow(FluentWindow):
             return
         node = self.nodeManager.nodes.get(machine_name)
         if node:
+            self._completed_cleanup_sent.pop(machine_name, None)
             self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
 
     def _autoFixTokenKey(self, machine_name: str) -> None:
@@ -248,7 +250,10 @@ class MainWindow(FluentWindow):
             return
         # 脚本停止时 game_state 被清空，跳过同步避免零值覆盖账号数据
         if not node.game_state:
+            self._completed_cleanup_sent.pop(machine_name, None)
             return
+        if node.game_state != GameState.COMPLETED:
+            self._completed_cleanup_sent.pop(machine_name, None)
         # 双层防护：level 和 jin_bi 都是零值时跳过（IPC 超时/重启过渡期产生的无效数据）
         if node.level == 0 and (not node.jin_bi or node.jin_bi == "0"):
             return
@@ -271,6 +276,8 @@ class MainWindow(FluentWindow):
             current_account=node.current_account,
             login_at=login_at,
         )
+        if node.game_state == GameState.COMPLETED:
+            self._request_slave_account_cleanup(machine_name)
 
     def _onAccountSync(self, machine_name: str, accounts: object) -> None:
         """slave ACCOUNT_SYNC → 同步账号数据 + 封禁检测"""
@@ -289,6 +296,7 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         if not node:
             return
+        self._completed_cleanup_sent.pop(machine_name, None)
         existing = self.accountPool.get_account_for_machine(machine_name)
         if existing:
             # 该机器有未完成账号 → 重新下发，让 TestDemo 继续跑
@@ -303,6 +311,21 @@ class MainWindow(FluentWindow):
         node.current_account = ""
         node.game_state = ""
         self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
+
+    def _request_slave_account_cleanup(self, machine_name: str) -> None:
+        """master 确认账号已完成后，通知 slave 清理本地残留账号文件。"""
+        node = self.nodeManager.nodes.get(machine_name)
+        if node is None or not node.ip:
+            return
+        cleanup_key = node.current_account.strip() or "__completed__"
+        if self._completed_cleanup_sent.get(machine_name) == cleanup_key:
+            return
+        self.tcpCommander.send(
+            node.ip,
+            TcpCommand.DELETE_FILE,
+            ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+        )
+        self._completed_cleanup_sent[machine_name] = cleanup_key
 
     def _autoAssignKami(self, machine_name: str) -> None:
         """节点上线时自动分配可用卡密（纯本地 SQLite 查询，不做 HTTP）"""

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from common.models import PLATFORM_ACCOUNT_HEADER, AccountInfo, AccountStatus
-from common.protocol import TcpCommand
+from common.models import PLATFORM_ACCOUNT_HEADER, AccountInfo, AccountStatus, NodeInfo
+from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, GameState, TcpCommand
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.platform_syncer import PlatformSyncer
@@ -470,6 +470,47 @@ class TestTcpCommanderShutdown:
         commander.stop()
 
         mock_pool.waitForDone.assert_called_once()
+
+
+class TestCompletedStatusCleanup:
+    """验证 master 在确认已完成后只下发一次 slave 清理指令。"""
+
+    def test_sync_completed_status_requests_slave_cleanup_once(self, tmp_path) -> None:
+        from master.app.view.main_window import MainWindow
+
+        db = AccountDB(tmp_path / "test.db")
+        try:
+            db.import_fresh("u1----p1")
+            db.allocate("VM-01")
+
+            fake = type("FakeMainWindow", (), {})()
+            fake.nodeManager = NodeManager()
+            fake.accountPool = db
+            fake.tcpCommander = MagicMock()
+            fake._completed_cleanup_sent = {}
+            fake._request_slave_account_cleanup = MainWindow._request_slave_account_cleanup.__get__(
+                fake, type(fake)
+            )
+            fake.nodeManager.nodes["VM-01"] = NodeInfo(
+                machine_name="VM-01",
+                ip="10.0.0.1",
+                level=18,
+                jin_bi="600",
+                elapsed="120",
+                current_account="u1",
+                game_state=GameState.COMPLETED,
+            )
+
+            MainWindow._syncAccountFromNode(fake, "VM-01")
+            MainWindow._syncAccountFromNode(fake, "VM-01")
+
+            fake.tcpCommander.send.assert_called_once_with(
+                "10.0.0.1",
+                TcpCommand.DELETE_FILE,
+                ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+            )
+        finally:
+            db.close()
 
 
 # ── M1-fix: LogReceiver 并发处理连接 ──

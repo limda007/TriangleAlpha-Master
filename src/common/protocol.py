@@ -15,6 +15,12 @@ OFFLINE_TIMEOUT = 15
 DISCONNECT_TIMEOUT = 60
 TCP_SEND_TIMEOUT = 60
 SLAVE_SELF_UPDATE_FILENAME = "TriangleAlpha-Slave.exe"
+ACCOUNT_RUNTIME_CLEANUP_FILES = (
+    "accounts.txt.imported",
+    "accounts.json",
+    "runtime_status.json",
+)
+ACCOUNT_RUNTIME_CLEANUP_PAYLOAD = "|".join(ACCOUNT_RUNTIME_CLEANUP_FILES)
 
 
 class UdpMessageType(enum.Enum):

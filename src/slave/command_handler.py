@@ -9,7 +9,13 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from common.protocol import TCP_CMD_PORT, ParsedTcpCommand, TcpCommand, parse_tcp_command
+from common.protocol import (
+    ACCOUNT_RUNTIME_CLEANUP_FILES,
+    TCP_CMD_PORT,
+    ParsedTcpCommand,
+    TcpCommand,
+    parse_tcp_command,
+)
 from slave.logging_utils import get_logger
 from slave.process_manager import ProcessManager
 from slave.self_update import launch_self_update_helper, prepare_self_update
@@ -166,7 +172,7 @@ class CommandHandler:
 
     def _clear_stale_account_runtime_files(self) -> None:
         """下发新账号后清理 TestDemo 遗留状态，避免旧号重新回流。"""
-        for filename in ("accounts.json", "accounts.imported", "runtime_status.json"):
+        for filename in ACCOUNT_RUNTIME_CLEANUP_FILES:
             fpath = self._base_dir / filename
             if not fpath.exists():
                 continue

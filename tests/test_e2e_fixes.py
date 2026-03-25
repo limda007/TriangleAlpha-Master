@@ -76,7 +76,7 @@ class TestTcpUpdateTxtE2E:
         port = _free_port()
         accounts = "user1----pass1\nuser2----pass2"
         (tmp_path / "accounts.json").write_text('{"stale": true}', encoding="utf-8")
-        (tmp_path / "accounts.imported").write_text("old", encoding="utf-8")
+        (tmp_path / "accounts.txt.imported").write_text("old", encoding="utf-8")
         (tmp_path / "runtime_status.json").write_text('{"current_account":"old-user"}', encoding="utf-8")
 
         async def run():
@@ -101,7 +101,7 @@ class TestTcpUpdateTxtE2E:
             assert f.exists()
             assert f.read_text(encoding="utf-8") == accounts
             assert not (tmp_path / "accounts.json").exists()
-            assert not (tmp_path / "accounts.imported").exists()
+            assert not (tmp_path / "accounts.txt.imported").exists()
             assert not (tmp_path / "runtime_status.json").exists()
 
             server_task.cancel()

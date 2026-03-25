@@ -51,7 +51,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
-from common.protocol import SLAVE_SELF_UPDATE_FILENAME, TcpCommand
+from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, SLAVE_SELF_UPDATE_FILENAME, TcpCommand
 from master.app.common.config import cfg
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
@@ -1251,7 +1251,7 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _cleanStandaloneAccounts(self) -> None:
-        """清理单机账号：删除 accounts.txt.imported 和 accounts.json"""
+        """清理单机账号：删除账号导入标记、账号快照和运行状态。"""
         ips, selected = self._getTargetIPs()
         if not ips:
             InfoBar.warning(
@@ -1262,11 +1262,10 @@ class BigScreenInterface(ScrollArea):
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         if not self._confirmDangerous(
             "清理单机账号",
-            f"即将删除 {scope} 的 accounts.json 和 accounts.txt.imported，此操作不可恢复",
+            f"即将删除 {scope} 的 accounts.txt.imported、accounts.json 和 runtime_status.json，此操作不可恢复",
         ):
             return
-        payload = "accounts.txt.imported|accounts.json"
-        self._tcp.broadcast(ips, TcpCommand.DELETE_FILE, payload)
+        self._tcp.broadcast(ips, TcpCommand.DELETE_FILE, ACCOUNT_RUNTIME_CLEANUP_PAYLOAD)
         self._nm.add_history("清理单机账号", scope)
         InfoBar.success(
             "已清理", f"清理指令已发送到 {scope}",

@@ -11,7 +11,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QHeaderView, QWidget
 
 from common.models import NodeInfo
-from common.protocol import TcpCommand
+from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, TcpCommand
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
@@ -137,3 +137,24 @@ def test_one_click_start_pushes_selected_files(
     ]
     assert broadcast_mock.call_args_list == expected
     success_mock.assert_called_once()
+
+
+def test_clean_standalone_accounts_cleans_runtime_files(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widget, node_manager, commander, _account_db = bigscreen
+    node_manager.nodes["VM-01"] = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    widget._refreshNodeTable()
+
+    broadcast_mock = MagicMock()
+    monkeypatch.setattr(widget, "_confirmDangerous", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(commander, "broadcast", broadcast_mock)
+
+    widget._cleanStandaloneAccounts()
+
+    broadcast_mock.assert_called_once_with(
+        ["10.0.0.1"],
+        TcpCommand.DELETE_FILE,
+        ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+    )
