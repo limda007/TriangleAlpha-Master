@@ -80,11 +80,16 @@ def test_account_panel_refresh_only_loads_idle_accounts(bigscreen) -> None:
     widget, _node_manager, _commander, account_db = bigscreen
     account_db.import_fresh("u1----p1\nu2----p2")
     account_db.allocate("VM-01")
+    account_db._conn.execute(
+        "UPDATE accounts SET last_login_at='2026-03-25 09:15:00' WHERE username='u2'"
+    )
+    account_db._conn.commit()
 
     widget._flushAccountRefresh()
 
     assert widget.accountTable.rowCount() == 1
     assert widget.accountTable.item(0, 0).text() == "u2"
+    assert widget.accountTable.item(0, 6).text() == "03-25 09:15"
     header = widget.accountTable.horizontalHeader()
     assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Stretch
     assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed

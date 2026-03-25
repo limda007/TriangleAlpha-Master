@@ -52,11 +52,11 @@ _COLUMN_WIDTHS = {
     1: 92,
     3: 108,
     4: 86,
-    5: 112,
+    5: 140,
     6: 64,
-    7: 80,
-    8: 132,
-    9: 96,
+    7: 96,
+    8: 152,
+    9: 120,
 }
 
 
@@ -176,7 +176,7 @@ class AccountInterface(ScrollArea):
                 acc.assigned_machine,
                 str(acc.level) if acc.level else "",
                 acc.jin_bi if acc.jin_bi != "0" else "",
-                acc.last_login_at.strftime("%Y-%m-%d %H:%M") if acc.last_login_at else "",
+                acc.last_login_at.strftime("%m-%d %H:%M") if acc.last_login_at else "",
                 acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
             ]
             for col, text in enumerate(vals):

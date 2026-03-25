@@ -1093,7 +1093,7 @@ class BigScreenInterface(ScrollArea):
                 acc.assigned_machine,
                 str(acc.level) if acc.level else "",
                 acc.jin_bi if acc.jin_bi != "0" else "",
-                acc.last_login_at.strftime("%Y-%m-%d %H:%M") if acc.last_login_at else "",
+                acc.last_login_at.strftime("%m-%d %H:%M") if acc.last_login_at else "",
                 acc.completed_at.strftime("%m-%d %H:%M") if acc.completed_at else "",
             ]
             for col, text in enumerate(vals):
