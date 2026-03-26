@@ -16,3 +16,8 @@ dist/
 accounts.db
 accounts.db-shm
 accounts.db-wal
+
+# Local runtime logs
+master.log
+master.log.*
+crash.log

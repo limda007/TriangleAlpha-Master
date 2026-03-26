@@ -5,6 +5,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
@@ -38,6 +39,17 @@ def _get_db_path() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent / "accounts.db"
     return Path(__file__).resolve().parents[4] / "accounts.db"
+
+
+def _ensure_bound_account_cache(window: object) -> dict[str, str]:
+    """兼容测试桩对象，确保绑定账号缓存始终可用。"""
+    window_obj = cast(Any, window)
+    cache = getattr(window_obj, "_bound_account_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    window_obj._bound_account_cache = cache
+    return cache
 
 
 class MainWindow(FluentWindow):
@@ -92,6 +104,8 @@ class MainWindow(FluentWindow):
         self.nodeManager.node_status_reported.connect(self._syncAccountFromNode)
         self._account_retry_sent_at: dict[str, float] = {}
         self._ACCOUNT_RETRY_SEC = 10
+        # 缓存每个节点上一次校验过的绑定账号，避免每条 STATUS 都查 DB
+        self._bound_account_cache: dict[str, str] = {}  # machine_name → username
         self.nodeManager.node_status_reported.connect(self._retry_missed_account_request)
 
         # slave ACCOUNT_SYNC → 批量 upsert 账号到 AccountDB
@@ -99,6 +113,11 @@ class MainWindow(FluentWindow):
 
         # TestDemo NEED_ACCOUNT → 自动分配空闲账号
         self.nodeManager.need_account.connect(self._onNeedAccount)
+
+        # 定期清理离线节点和追踪字典（每 30 分钟）
+        self._purgeTimer = QTimer(self)
+        self._purgeTimer.timeout.connect(self._purgeStaleData)
+        self._purgeTimer.start(30 * 60_000)
 
         # 平台同步
         self._initPlatformSyncer()
@@ -158,6 +177,22 @@ class MainWindow(FluentWindow):
             "日志服务异常", msg,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
+
+    def _purgeStaleData(self) -> None:
+        """定期清理：过期离线节点 + 追踪字典中已不存在的节点"""
+        self.nodeManager.purge_stale_nodes()
+        # 清理追踪字典中不再存在于 nodes 的条目
+        active_nodes = set(self.nodeManager.nodes.keys())
+        bound_account_cache = _ensure_bound_account_cache(self)
+        for d in (
+            self._tokenPushedAt,
+            self._completed_cleanup_sent,
+            self._account_retry_sent_at,
+            bound_account_cache,
+        ):
+            stale_keys = [k for k in d if k not in active_nodes]
+            for k in stale_keys:
+                del d[k]
 
     def _initPlatformSyncer(self) -> None:
         self.platformSyncer = PlatformSyncer(self.accountPool, parent=self)
@@ -260,9 +295,16 @@ class MainWindow(FluentWindow):
         if node.level == 0 and (not node.jin_bi or node.jin_bi == "0"):
             return
         # 校验 current_account 与绑定账号一致，防止旧号数据写入新号
+        # 使用缓存减少 DB 查询：仅在 current_account 变化时才查 DB
+        bound_account_cache = _ensure_bound_account_cache(self)
         if node.current_account:
-            bound = self.accountPool.get_account_for_machine(machine_name)
-            if bound and bound.username != node.current_account:
+            cached_bound = bound_account_cache.get(machine_name)
+            if cached_bound is None or cached_bound == "":
+                # 缓存未命中，查 DB 并缓存
+                bound = self.accountPool.get_account_for_machine(machine_name)
+                cached_bound = bound.username if bound else ""
+                bound_account_cache[machine_name] = cached_bound
+            if cached_bound and cached_bound != node.current_account:
                 return
         # 从 elapsed 反推登录时间，确保快速完成的账号也能记录
         login_at = ""
@@ -279,6 +321,8 @@ class MainWindow(FluentWindow):
             login_at=login_at,
         )
         if node.game_state == GameState.COMPLETED:
+            # 账号完成 → 清除绑定缓存，下次分配时重新查询
+            bound_account_cache.pop(machine_name, None)
             self._request_slave_account_cleanup(machine_name)
 
     def _onAccountSync(self, machine_name: str, accounts: object) -> None:
@@ -326,10 +370,12 @@ class MainWindow(FluentWindow):
         node = self.nodeManager.nodes.get(machine_name)
         if not node:
             return
+        bound_account_cache = _ensure_bound_account_cache(self)
         self._completed_cleanup_sent.pop(machine_name, None)
         existing = self.accountPool.get_account_for_machine(machine_name)
         if existing:
             # 该机器有未完成账号 → 重新下发，让 TestDemo 继续跑
+            bound_account_cache[machine_name] = existing.username
             self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, existing.to_line())
             return
         acc = self.accountPool.allocate(machine_name)
@@ -340,6 +386,7 @@ class MainWindow(FluentWindow):
         node.jin_bi = "0"
         node.current_account = ""
         node.game_state = ""
+        bound_account_cache[machine_name] = acc.username
         self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
 
     def _request_slave_account_cleanup(self, machine_name: str) -> None:

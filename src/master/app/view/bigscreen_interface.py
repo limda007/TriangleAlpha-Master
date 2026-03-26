@@ -189,6 +189,10 @@ class BigScreenInterface(ScrollArea):
         self._start_time = datetime.now()
         self._row_map: dict[str, int] = {}
         self._pending_updates: set[str] = set()
+        # 缓存 api_key 和 kami 绑定，避免 _setRowData 每行查 DB
+        self._cached_api_key: str = self._pool.get_config("api_key")
+        self._cached_kami_map: dict[str, str] = {}  # machine_name → kami_code_display
+        self._rebuildKamiCache()
 
         # 预渲染状态图标缓存
         self._status_icons: dict[str, QIcon] = {
@@ -277,6 +281,8 @@ class BigScreenInterface(ScrollArea):
         self._nm.node_offline.connect(self._onNodeOffline)
         self._nm.stats_changed.connect(self._refreshHeader)
         self._pool.pool_changed.connect(self._scheduleAccountRefresh)
+        if self._kami_db:
+            self._kami_db.kami_changed.connect(self._rebuildKamiCache)
 
         self._tcp.command_failed.connect(self._onCmdFailed)
 
@@ -366,13 +372,25 @@ class BigScreenInterface(ScrollArea):
         if lbl:
             lbl.setText(text)
 
+    def _rebuildKamiCache(self) -> None:
+        """重建 kami 绑定缓存，避免 _setRowData 每行查 DB"""
+        self._cached_kami_map.clear()
+        if not self._kami_db:
+            return
+        for kami in self._kami_db.get_all_kamis():
+            display = kami.kami_code[:8] if kami.kami_code else ""
+            for node_name in kami.bound_nodes:
+                self._cached_kami_map[node_name] = display
+
     def _scheduleAccountRefresh(self) -> None:
         if not self._accountRefreshTimer.isActive():
             self._accountRefreshTimer.start()
 
     def _flushAccountRefresh(self) -> None:
         self._refreshAccountStats()
-        self._refreshAccountTable()
+        # 仅在账号面板可见时才加载全量账号表格，减少不必要的 DB 查询和内存分配
+        if self._bottomWidget.isVisible():
+            self._refreshAccountTable()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._tableRefreshTimer.stop()
@@ -868,6 +886,7 @@ class BigScreenInterface(ScrollArea):
             )
             return
         self._pool.set_config("api_key", key)
+        self._cached_api_key = key  # 同步缓存
         InfoBar.success(
             "已保存", "API Key 已保存到本地配置",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
@@ -886,6 +905,7 @@ class BigScreenInterface(ScrollArea):
             return
         # 先保存到本地
         self._pool.set_config("api_key", key)
+        self._cached_api_key = key  # 同步缓存
         # 再下发到节点
         ips, selected = self._getTargetIPs()
         if not ips:
@@ -1008,14 +1028,14 @@ class BigScreenInterface(ScrollArea):
             self._setRowData(target_row, target_node)
 
     def _setRowData(self, row: int, node) -> None:
-        # 优先显示 slave 实际上报的本地卡密，其次回退到 master 本地绑定关系
+        # 优先显示 slave 实际上报的本地卡密，其次回退到缓存的绑定关系
         kami_display = "--"
         if node.kami_code:
             kami_display = node.kami_code[:8]
-        elif self._kami_db:
-            kami = self._kami_db.get_kami_for_node(node.machine_name)
-            if kami:
-                kami_display = kami.kami_code[:8]
+        else:
+            cached = self._cached_kami_map.get(node.machine_name)
+            if cached:
+                kami_display = cached
         texts = [
             "",  # col 0 状态图标
             node.machine_name,
@@ -1058,8 +1078,8 @@ class BigScreenInterface(ScrollArea):
             if state_item.foreground().color() != color:
                 state_item.setForeground(color)
 
-        # Token 告警：缺少或不一致时在运行状态后追加警告
-        master_key = self._pool.get_config("api_key")
+        # Token 告警：缺少或不一致时在运行状态后追加警告（使用缓存值）
+        master_key = self._cached_api_key
         if master_key and state_item:
             if not node.token_key:
                 warn_text = texts[8] + " ⚠缺Key"

@@ -68,7 +68,9 @@ class AccountDB(QObject):
     def __init__(self, db_path: str | Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db_path = str(db_path)
-        self._conn: sqlite3.Connection = sqlite3.connect(self._db_path, timeout=10)
+        self._conn: sqlite3.Connection = sqlite3.connect(
+            self._db_path, timeout=10, isolation_level=None,
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._write_lock = self._get_write_lock(self._db_path)

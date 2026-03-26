@@ -11,6 +11,7 @@ from common.models import NodeInfo, OperationRecord
 from common.protocol import DISCONNECT_TIMEOUT, OFFLINE_TIMEOUT, GameState, UdpMessage, UdpMessageType
 
 _MAX_HISTORY = 1000
+_STALE_NODE_HOURS = 24  # 断连超过此小时数的节点将被清理
 
 
 class NodeManager(QObject):
@@ -76,6 +77,21 @@ class NodeManager(QObject):
         if changed:
             self._recalc_online()
             self._schedule_stats()
+
+    def purge_stale_nodes(self) -> int:
+        """清理断连超过 _STALE_NODE_HOURS 的节点，释放内存"""
+        now = datetime.now()
+        stale = [
+            name for name, node in self.nodes.items()
+            if node.status in ("离线", "断连")
+            and (now - node.last_seen).total_seconds() > _STALE_NODE_HOURS * 3600
+        ]
+        for name in stale:
+            del self.nodes[name]
+        if stale:
+            self._recalc_online()
+            self._schedule_stats()
+        return len(stale)
 
     def add_history(self, op_type: str, target: str, detail: str = "", result: str = "") -> None:
         """追加操作记录（上限 _MAX_HISTORY 条，超出丢弃最旧的）"""

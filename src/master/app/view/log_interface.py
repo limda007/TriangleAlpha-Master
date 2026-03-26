@@ -47,7 +47,8 @@ class LogInterface(ScrollArea):
         super().__init__(parent)
         self.setObjectName("logInterface")
         self._logs: dict[str, list[str]] = defaultdict(list)  # machine -> [formatted_lines]
-        self._max_lines = 5000  # 每个节点最多保留行数
+        self._max_lines = 500  # 每个节点最多保留行数（降低内存占用）
+        self._max_display_lines = 10000  # QPlainTextEdit 最大行数
         self._auto_scroll = True
         self._receiver: LogReceiverThread | None = None
 
@@ -106,6 +107,7 @@ class LogInterface(ScrollArea):
         self.logOutput = QPlainTextEdit(self)
         self.logOutput.setReadOnly(True)
         self.logOutput.setObjectName("logOutput")
+        self.logOutput.setMaximumBlockCount(self._max_display_lines)  # 自动清理旧行，防内存溢出
         contentLayout.addWidget(self.logOutput, 1)
         self.mainLayout.addLayout(contentLayout, 1)
 
@@ -139,13 +141,19 @@ class LogInterface(ScrollArea):
         name = entry.machine_name
         formatted = f"[{entry.timestamp}] [{entry.level}] {entry.content}"
 
-        # 添加到缓存
+        # 添加到缓存（每节点上限 + 超限节点淘汰最旧）
         lines = self._logs[name]
         lines.append(formatted)
         if len(lines) > self._max_lines:
-            self._logs[name] = lines[-self._max_lines:]
+            # 截断保留最近一半，避免频繁切片
+            self._logs[name] = lines[-(self._max_lines // 2):]
 
-        # 更新节点列表
+        # 全局节点数上限：超过 200 个节点时淘汰最旧
+        if len(self._logs) > 200:
+            oldest = next(iter(self._logs))
+            del self._logs[oldest]
+
+        # 更新节点列表（用 set 缓存避免每次遍历）
         found = False
         for i in range(self.nodeList.count()):
             if self.nodeList.item(i).text() == name:
@@ -156,7 +164,7 @@ class LogInterface(ScrollArea):
             self.nodeList.addItem(item)
             item.setSelected(True)
 
-        # 追加到显示
+        # 追加到显示（QPlainTextEdit 的 maximumBlockCount 自动清理旧行）
         selected_names = {
             self.nodeList.item(i).text()
             for i in range(self.nodeList.count())

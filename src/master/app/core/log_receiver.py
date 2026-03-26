@@ -1,6 +1,7 @@
 """日志接收线程 — TCP 8890 接收被控端日志"""
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import traceback
@@ -9,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from common.protocol import TCP_LOG_PORT
+
+_logger = logging.getLogger(__name__)
 
 
 class LogEntry:
@@ -84,7 +87,7 @@ class LogReceiverThread(QThread):
                     if text:
                         self._parse_line(text)
         except Exception:
-            pass
+            _logger.debug("日志连接处理异常", exc_info=True)
         finally:
             conn.close()
         # 处理末尾无换行的残余
