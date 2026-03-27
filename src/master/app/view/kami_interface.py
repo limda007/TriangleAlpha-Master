@@ -418,7 +418,7 @@ class KamiInterface(ScrollArea):
             )
         else:
             InfoBar.warning(
-                "分配失败", "节点已有卡密绑定，或该卡密设备额度已满",
+                "分配失败", "节点已有卡密绑定，或该卡密不可分配/设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
 

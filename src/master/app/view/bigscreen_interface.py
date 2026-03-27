@@ -1645,7 +1645,7 @@ class BigScreenInterface(ScrollArea):
         kami = self._kami_db.find_available_kami()
         if kami is None:
             InfoBar.warning(
-                "无可用卡密", "没有可分配的已激活卡密",
+                "无可用卡密", "没有可分配的有效卡密",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
             )
             return
@@ -1657,7 +1657,7 @@ class BigScreenInterface(ScrollArea):
             )
         else:
             InfoBar.warning(
-                "分配失败", "节点已有卡密绑定，或该卡密设备额度已满",
+                "分配失败", "节点已有卡密绑定，或该卡密不可分配/设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
             )
 

@@ -49,6 +49,15 @@ _STATUS_FROM_API = {
     True: "已激活",
     False: "已过期",
 }
+_ALLOCATABLE_STATUSES = frozenset({
+    KamiStatus.ACTIVATED.value,
+    KamiStatus.UNUSED.value,
+})
+
+
+def _is_allocatable_status(status: str) -> bool:
+    """判断卡密是否处于可分配状态。"""
+    return status in _ALLOCATABLE_STATUSES
 
 
 def _parse_device_count(val: str | int) -> tuple[int, int]:
@@ -145,8 +154,8 @@ class KamiDB(QObject):
             device_used, device_total = _parse_device_count(
                 r.get("device_count", "0/0"),
             )
-            # 已激活卡密 device_total 不应为 0，后备为 1
-            if status == "已激活" and device_total == 0:
+            # 有效卡密 device_total 不应为 0，后备为 1
+            if _is_allocatable_status(status) and device_total == 0:
                 device_total = 1
             # 推断激活日期
             activated_at = _infer_activated_at(end_date, remaining)
@@ -194,12 +203,13 @@ class KamiDB(QObject):
         return [r["kami_code"] for r in cur.fetchall()]
 
     def find_available_kami(self) -> KamiInfo | None:
-        """找到一个可分配的卡密: status='已激活' AND device_used < device_total"""
+        """找到一个可分配的卡密：有效状态且仍有剩余额度。"""
         cur = self._conn.execute(
             "SELECT k.*, GROUP_CONCAT(b.node_name, ', ') AS nodes"
             " FROM kamis k LEFT JOIN kami_bindings b ON k.id = b.kami_id"
-            " WHERE k.status='已激活' AND k.device_used < k.device_total"
+            " WHERE k.status IN (?, ?) AND k.device_used < k.device_total"
             " GROUP BY k.id ORDER BY k.remaining_days DESC LIMIT 1",
+            tuple(_ALLOCATABLE_STATUSES),
         )
         row = cur.fetchone()
         return self._row_to_info(row) if row else None
@@ -216,10 +226,12 @@ class KamiDB(QObject):
             return int(existing["kami_id"]) == kami_id
 
         kami_row = self._conn.execute(
-            "SELECT device_used, device_total FROM kamis WHERE id=? LIMIT 1",
+            "SELECT status, device_used, device_total FROM kamis WHERE id=? LIMIT 1",
             (kami_id,),
         ).fetchone()
         if kami_row is None:
+            return False
+        if not _is_allocatable_status(str(kami_row["status"])):
             return False
         if int(kami_row["device_total"]) <= int(kami_row["device_used"]):
             return False
@@ -317,10 +329,11 @@ class KamiDB(QObject):
     # ── 内部方法 ──────────────────────────────────────────
 
     def _migrate_status_aliases(self) -> None:
-        """迁移：修复 device_total=0 的已激活卡密（后备为 1）。"""
+        """迁移：修复有效卡密 device_total=0 的历史脏数据。"""
         changed = self._conn.execute(
             "UPDATE kamis SET device_total=1 "
-            "WHERE status='已激活' AND device_total=0",
+            "WHERE status IN (?, ?) AND device_total=0",
+            tuple(_ALLOCATABLE_STATUSES),
         ).rowcount
         if changed:
             self._conn.commit()

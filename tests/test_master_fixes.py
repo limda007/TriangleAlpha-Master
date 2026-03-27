@@ -268,6 +268,29 @@ class TestKamiBindingGuards:
         assert db.find_available_kami() is not None
         db.close()
 
+    def test_find_available_kami_accepts_unused_valid_kami(self, tmp_path):
+        db = KamiDB(tmp_path / "kami.db")
+        db.upsert_kamis([
+            {"kami": "KAMI-UNUSED", "ok": True, "status": "未使用", "device_count": "0/1"},
+        ])
+
+        kami = db.find_available_kami()
+        assert kami is not None
+        assert kami.kami_code == "KAMI-UNUSED"
+        assert db.bind_node(kami.id, "VM-01") is True
+        db.close()
+
+    def test_bind_node_rejects_expired_kami_even_with_capacity(self, tmp_path):
+        db = KamiDB(tmp_path / "kami.db")
+        db.upsert_kamis([
+            {"kami": "KAMI-EXPIRED", "ok": False, "status": "已过期", "device_count": "0/1"},
+        ])
+
+        kami = db.get_all_kamis()[0]
+        assert db.bind_node(kami.id, "VM-01") is False
+        assert db.get_kami_for_node("VM-01") is None
+        db.close()
+
 
 # ── M7: 导出时间戳 ──
 

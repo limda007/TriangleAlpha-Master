@@ -159,6 +159,35 @@ def test_context_menu_assign_kami_action_keeps_selected_nodes(
     kami_db.close()
 
 
+def test_batch_assign_kami_to_nodes_accepts_unused_valid_kami(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widget, node_manager, commander, account_db = bigscreen
+    kami_db = KamiDB(account_db._db_path)
+    widget._kami_db = kami_db
+    kami_db.upsert_kamis([
+        {"kami": "KAMI-UNUSED", "ok": True, "status": "未使用", "device_count": "0/1"},
+    ])
+    node1 = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    node2 = NodeInfo(machine_name="VM-02", ip="10.0.0.2")
+    node_manager.nodes["VM-01"] = node1
+    node_manager.nodes["VM-02"] = node2
+
+    send_mock = MagicMock()
+    success_mock = MagicMock()
+    monkeypatch.setattr(commander, "send", send_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", success_mock)
+
+    widget._assignKamiToNodes([node1, node2])
+
+    send_mock.assert_called_once_with("10.0.0.1", TcpCommand.PUSH_KAMI, "KAMI-UNUSED")
+    assert kami_db.get_kami_for_node("VM-01") is not None
+    assert kami_db.get_kami_for_node("VM-02") is None
+    success_mock.assert_called_once()
+    kami_db.close()
+
+
 def test_send_cmd_to_nodes_broadcasts_selected_nodes(
     bigscreen,
     monkeypatch: pytest.MonkeyPatch,
