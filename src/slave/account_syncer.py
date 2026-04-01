@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 from slave.logging_utils import get_logger
@@ -20,17 +21,14 @@ class AccountSyncer:
 
     def build_sync_accounts(
         self,
-        load_snapshot: object,
+        load_snapshot: Callable[[], RuntimeStatus],
         now: datetime | None = None,
     ) -> list[dict[str, object]]:
-        """构建待同步账号快照，并用运行时长校正当前活跃账号的登录时间。
-
-        *load_snapshot* 是一个无参数回调，返回 ``RuntimeStatus``。
-        """
+        """构建待同步账号快照，并用运行时长校正当前活跃账号的登录时间。"""
         accounts = self._state_store.load_all_game_accounts()
         if not accounts:
             return accounts
-        snapshot: RuntimeStatus = load_snapshot()  # type: ignore[operator]
+        snapshot = load_snapshot()
         align_active_account_login_at(accounts, snapshot, now=now)
         return accounts
 

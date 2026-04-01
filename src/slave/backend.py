@@ -155,6 +155,7 @@ class SlaveBackend(QThread):
         except asyncio.CancelledError:
             pass
         finally:
+            self._process_watcher.stop()
             self._heartbeat.stop()
             await handler.stop()
             await log_reporter.stop()

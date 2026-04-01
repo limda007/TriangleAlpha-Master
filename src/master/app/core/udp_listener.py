@@ -1,6 +1,7 @@
 """UDP 广播监听线程：接收被控端心跳和状态消息"""
 from __future__ import annotations
 
+import errno
 import socket
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -39,7 +40,7 @@ class UdpListenerThread(QThread):
                     continue
                 except OSError as exc:
                     if (
-                        exc.errno in {getattr(socket, "EMSGSIZE", None), _WSAEMSGSIZE}
+                        exc.errno in {errno.EMSGSIZE, _WSAEMSGSIZE}
                         or getattr(exc, "winerror", None) == _WSAEMSGSIZE
                     ):
                         continue
