@@ -110,8 +110,10 @@ class _BalanceWorker(QThread):
             else:
                 err = data.get("error") or data.get("Error") or "未知错误"
                 self.result_ready.emit(0, 0, 0, err)
-        except Exception as exc:
+        except httpx.HTTPError as exc:
             self.result_ready.emit(0, 0, 0, f"网络异常: {exc}")
+        except (KeyError, ValueError, TypeError) as exc:
+            self.result_ready.emit(0, 0, 0, f"数据解析错误: {exc}")
 
 
 _NODE_HEADERS = [
@@ -1248,7 +1250,6 @@ class BigScreenInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
-        from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path, _ = QFileDialog.getSaveFileName(
             self, "提取已完成账号", f"提取账号_{ts}.txt", "Text (*.txt)",

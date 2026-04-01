@@ -111,7 +111,7 @@ class ProcessWatcher:
                             await pm.kill_by_name("TriangleAlpha.Launcher")
                             await asyncio.sleep(2)
                             await pm.start_launcher()
-                        except Exception:
+                        except (OSError, psutil.Error):
                             logger.exception("重启 Launcher 失败")
             else:
                 testdemo_down_since = None
@@ -139,7 +139,7 @@ class ProcessWatcher:
                     await pm.kill_by_name("TriangleAlpha.Launcher")
                     await asyncio.sleep(2)
                     await pm.start_launcher()
-                except Exception:
+                except (OSError, psutil.Error):
                     logger.exception("重启 Launcher 失败 (IPC 超时)")
 
             was_running = running

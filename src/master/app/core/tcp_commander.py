@@ -27,7 +27,7 @@ class _TcpSendTask(QRunnable):
             sock.connect((self._ip, TCP_CMD_PORT))
             sock.sendall((self._command_str + "\n").encode("utf-8"))
             self._commander.command_sent.emit(self._ip, self._command_str)
-        except Exception as e:  # noqa: BLE001
+        except OSError as e:
             if self._is_expected_self_update_disconnect(e):
                 self._commander.command_sent.emit(self._ip, self._command_str)
             else:

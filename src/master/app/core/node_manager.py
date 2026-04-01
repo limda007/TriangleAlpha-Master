@@ -241,7 +241,7 @@ class NodeManager(QObject):
         try:
             raw = base64.b64decode(msg.sync_payload).decode("utf-8")
             accounts = json.loads(raw)
-        except Exception:
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return
         if isinstance(accounts, list):
             self.account_sync_received.emit(msg.machine_name, accounts)

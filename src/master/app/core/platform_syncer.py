@@ -57,7 +57,7 @@ class _SyncWorker(QThread):
                     self._do_refresh(http)
         except PlatformAPIError as e:
             self.error_occurred.emit(str(e))
-        except Exception as e:
+        except httpx.HTTPError as e:
             self.error_occurred.emit(f"平台同步异常：{e}")
 
     def _do_connect(self, http: httpx.Client) -> None:

@@ -12,12 +12,14 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
+from slave.auto_setup import uninstall
 from slave.heartbeat import SLAVE_VERSION
 from slave.runtime_paths import RESOURCE_DIR
 
@@ -242,8 +244,6 @@ class SlaveWindow(QWidget):
 
     def _uninstall_and_quit(self) -> None:
         """卸载自清理后退出。"""
-        from PyQt6.QtWidgets import QMessageBox
-
         reply = QMessageBox.question(
             self, "卸载确认",
             "将删除开机自启计划任务并退出，确认卸载？",
@@ -251,7 +251,6 @@ class SlaveWindow(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        from slave.auto_setup import uninstall
         uninstall()
         self._tray.hide()
         QApplication.instance().quit()  # type: ignore[union-attr]

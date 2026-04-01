@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -438,7 +439,6 @@ class AccountInterface(ScrollArea):
         )
 
     def _copyToClipboard(self, text: str) -> None:
-        from PyQt6.QtWidgets import QApplication
         clipboard = QApplication.clipboard()
         if clipboard:
             clipboard.setText(text)

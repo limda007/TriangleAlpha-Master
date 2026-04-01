@@ -61,7 +61,7 @@ class LogReceiverThread(QThread):
                 self._executor.submit(self._handle_conn, conn)
             except TimeoutError:
                 continue
-            except Exception:
+            except OSError:
                 if self._running:
                     self.error_occurred.emit(traceback.format_exc())
 
@@ -86,7 +86,7 @@ class LogReceiverThread(QThread):
                     text = line.decode("utf-8", errors="ignore").strip()
                     if text:
                         self._parse_line(text)
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             _logger.debug("日志连接处理异常", exc_info=True)
         finally:
             conn.close()

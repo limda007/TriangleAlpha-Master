@@ -260,12 +260,12 @@ class CommandHandler:
         if content.startswith("BASE64:"):
             try:
                 raw = base64.b64decode(content[7:])
-            except Exception:
+            except (binascii.Error, ValueError):
                 logger.exception("BASE64 解码失败: %s", filename)
                 return ""
             try:
                 self._replace_binary_file(fpath, raw)
-            except Exception:
+            except OSError:
                 logger.exception("二进制文件写入失败: %s", filename)
                 return ""
         else:

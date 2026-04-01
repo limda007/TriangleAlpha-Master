@@ -188,7 +188,7 @@ class SlaveBackend(QThread):
             self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
             self._state_store.clear_runtime_status()
             logger.info("检测到 TestDemo 停止，已上报脚本停止状态")
-        except Exception:
+        except OSError:
             logger.exception("发送脚本停止状态失败")
 
     def _on_group_changed(self, group: str) -> None:
@@ -228,11 +228,11 @@ class SlaveBackend(QThread):
                         snapshot.elapsed,
                         snapshot.status_text,
                     )
-                except Exception:
+                except OSError:
                     logger.exception("周期性状态上报失败")
                 try:
                     self._retry_need_account_if_needed(snapshot, self._heartbeat)
-                except Exception:
+                except OSError:
                     logger.exception("补发 NEED_ACCOUNT 失败")
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
@@ -294,7 +294,7 @@ class SlaveBackend(QThread):
                     payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
                     self._heartbeat.send_account_sync(payload_b64)
                     logger.debug("账号同步已发送: %d 条", len(accounts))
-            except Exception:
+            except (OSError, ValueError, TypeError):
                 logger.exception("账号同步失败")
             await asyncio.sleep(30)
 

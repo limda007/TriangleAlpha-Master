@@ -206,14 +206,13 @@ def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
     if cmd in (TcpCommand.UPDATE_TXT, TcpCommand.UPDATE_KEY, TcpCommand.PUSH_KAMI) and payload:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
         return f"{cmd.value}|{encoded}"
-    elif cmd in (
+    if cmd in (
         TcpCommand.UPDATE_SELF,
         TcpCommand.EXT_SET_GROUP, TcpCommand.DELETE_FILE,
         TcpCommand.EXT_SET_CONFIG,
     ) and payload:
         return f"{cmd.value}|{payload}"
-    else:
-        return f"{cmd.value}|"
+    return f"{cmd.value}|"
 
 
 def build_self_update_payload(filename: str, raw: bytes) -> str:

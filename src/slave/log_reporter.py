@@ -86,7 +86,7 @@ class LogReporter:
             )
             self._writer = writer
             return writer
-        except Exception:
+        except (OSError, TimeoutError):
             self._writer = None
             return None
 
@@ -103,7 +103,7 @@ class LogReporter:
                 writer.write(payload)
                 await writer.drain()
                 return
-            except Exception:
+            except OSError:
                 # 连接断开，重置并重试
                 with contextlib.suppress(Exception):
                     writer.close()

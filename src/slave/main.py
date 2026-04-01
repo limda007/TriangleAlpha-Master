@@ -14,6 +14,7 @@ import psutil
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
+from slave.auto_setup import uninstall
 from slave.backend import SlaveBackend
 from slave.logging_utils import configure_slave_logging, get_logger
 from slave.runtime_paths import RESOURCE_DIR, get_base_dir
@@ -462,7 +463,6 @@ def _run_slave_app() -> int:
 def main() -> None:
     # --uninstall: 自清理后退出
     if "--uninstall" in sys.argv:
-        from slave.auto_setup import uninstall
         uninstall()
         print("卸载清理完成")
         sys.exit(0)

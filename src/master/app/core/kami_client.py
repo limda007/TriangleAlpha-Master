@@ -61,5 +61,5 @@ class KamiQueryWorker(QThread):
             with httpx.Client() as http:
                 results = api_client.query_batch(http, self._kami_codes)
             self.query_done.emit(results)
-        except (KamiAPIError, httpx.HTTPError, Exception) as e:
+        except (KamiAPIError, httpx.HTTPError) as e:
             self.error_occurred.emit(str(e))

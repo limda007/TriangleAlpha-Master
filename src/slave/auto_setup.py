@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,9 @@ from pathlib import Path
 import psutil
 
 from slave.logging_utils import get_logger
+
+if os.name == "nt":
+    import winreg  # type: ignore[import-not-found]
 
 logger = get_logger(__name__)
 
@@ -45,7 +49,7 @@ def setup_startup() -> None:
             shortcut_ok,
             registry_ok,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("自启动注册失败")
 
 
@@ -90,7 +94,7 @@ def _resolve_startup_dir() -> Path:
     fallback = _default_startup_dir()
     try:
         result = _run_cscript('WScript.Echo CreateObject("WScript.Shell").SpecialFolders("Startup")\n')
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("查询真实启动目录失败，回退默认路径")
         return fallback
     startup_dir = result.stdout.strip()
@@ -146,7 +150,7 @@ def _create_startup_shortcut(exe_path: Path) -> bool:
             return False
         logger.info("启动文件夹快捷方式已创建: %s", shortcut_path)
         return True
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("创建启动文件夹快捷方式失败")
         return False
 
@@ -154,8 +158,6 @@ def _create_startup_shortcut(exe_path: Path) -> bool:
 def _set_registry_startup(start_command: str) -> bool:
     """写入 HKCU Run，兼容部分机器自定义启动目录。"""
     try:
-        import winreg  # type: ignore[import-not-found]
-
         key = winreg.CreateKey(  # type: ignore[attr-defined]
             winreg.HKEY_CURRENT_USER,  # type: ignore[attr-defined]
             r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -172,7 +174,7 @@ def _set_registry_startup(start_command: str) -> bool:
             winreg.CloseKey(key)  # type: ignore[attr-defined]
         logger.info("注册表自启动已写入: %s", start_command)
         return True
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("写入注册表自启动失败")
         return False
 
@@ -185,15 +187,13 @@ def _remove_startup_shortcut() -> None:
         if shortcut_path.exists():
             shortcut_path.unlink()
             logger.info("已删除启动文件夹快捷方式: %s", shortcut_path)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("删除启动文件夹快捷方式失败")
 
 
 def _remove_legacy_registry_startup() -> None:
     """清除旧版注册表自启条目。"""
     try:
-        import winreg  # type: ignore[import-not-found]
-
         key = winreg.OpenKey(  # type: ignore[attr-defined]
             winreg.HKEY_CURRENT_USER,  # type: ignore[attr-defined]
             r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -207,7 +207,7 @@ def _remove_legacy_registry_startup() -> None:
             pass
         finally:
             winreg.CloseKey(key)  # type: ignore[attr-defined]
-    except Exception:
+    except OSError:
         pass  # 清理失败不影响主流程
 
 
@@ -239,7 +239,6 @@ def check_rename(base_dir: Path) -> None:
         if not target:
             return
         # M10: 白名单校验，仅允许字母数字、连字符、下划线
-        import re
         if not re.fullmatch(r"[A-Za-z0-9\-_]+", target):
             logger.warning("改名拒绝非法字符: %s", target)
             return
@@ -252,7 +251,7 @@ def check_rename(base_dir: Path) -> None:
             check=False,
         )
         logger.info("改名已提交，需重启生效")
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         logger.exception("改名流程异常")
 
 

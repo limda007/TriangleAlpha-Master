@@ -127,7 +127,7 @@ class HeartbeatService:
                         if self._on_sent:
                             self._on_sent(self._beat_count, cpu, mem)
                         consecutive_errors = 0
-                    except Exception as e:
+                    except OSError as e:
                         consecutive_errors += 1
                         logger.warning("心跳发送失败 (连续第 %s 次): %s", consecutive_errors, e)
                         if consecutive_errors >= 10:
@@ -142,7 +142,7 @@ class HeartbeatService:
                     offline = build_udp_offline(self._machine_name).encode("utf-8")
                     target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)
                     sock.sendto(offline, target)
-                except Exception:
+                except OSError:
                     pass
 
     def stop(self) -> None:
