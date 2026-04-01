@@ -5,6 +5,8 @@ from common.protocol import (
     build_udp_online,
     build_udp_status,
     parse_udp_message,
+    parse_tcp_command,
+    build_udp_account_sync,
 )
 
 
@@ -54,6 +56,54 @@ class TestParseUdp:
     def test_parse_need_kami_returns_none(self):
         assert parse_udp_message("NEED_KAMI|VM-01") is None
 
+    def test_parse_ext_online_invalid_cpu(self):
+        """Invalid float in CPU field defaults to 0.0"""
+        msg = parse_udp_message("EXT_ONLINE|VM-01|Admin|abc|60.1|1.0.0|A组")
+        assert msg is not None
+        assert msg.cpu_percent == 0.0
+        assert msg.mem_percent == 60.1
+
+    def test_parse_ext_online_negative_cpu(self):
+        """Negative float is valid"""
+        msg = parse_udp_message("EXT_ONLINE|VM-01|Admin|-1.5|60.1|1.0.0|A组")
+        assert msg is not None
+        assert msg.cpu_percent == -1.5
+
+    def test_parse_account_sync_empty_payload(self):
+        """Empty ACCOUNT_SYNC payload returns None"""
+        assert parse_udp_message("ACCOUNT_SYNC|VM-01|") is None
+
+    def test_parse_account_sync_valid(self):
+        """Valid ACCOUNT_SYNC parses correctly"""
+        msg = parse_udp_message("ACCOUNT_SYNC|VM-01|dGVzdA==")
+        assert msg is not None
+        assert msg.type == UdpMessageType.ACCOUNT_SYNC
+        assert msg.sync_payload == "dGVzdA=="
+
+    def test_parse_status_non_digit_level(self):
+        """Non-digit level defaults to 0"""
+        msg = parse_udp_message("STATUS|VM-01|运行中|abc|999|描述")
+        assert msg is not None
+        assert msg.level == 0
+
+    def test_parse_status_with_status_text(self):
+        """STATUS with 8 parts includes status_text"""
+        msg = parse_udp_message("STATUS|VM-01|运行中|18|12450|正在升级|120|等待匹配")
+        assert msg is not None
+        assert msg.status_text == "等待匹配"
+        assert msg.elapsed == "120"
+
+    def test_parse_empty_string(self):
+        """Empty string returns None"""
+        assert parse_udp_message("") is None
+
+    def test_parse_need_account(self):
+        """NEED_ACCOUNT parses correctly"""
+        msg = parse_udp_message("NEED_ACCOUNT|VM-01")
+        assert msg is not None
+        assert msg.type == UdpMessageType.NEED_ACCOUNT
+        assert msg.machine_name == "VM-01"
+
 
 class TestBuildUdp:
     def test_build_online(self):
@@ -79,3 +129,26 @@ class TestBuildTcp:
         parts = cmd.split("|", 1)
         assert parts[0] == "UPDATEKEY"
         assert base64.b64decode(parts[1]).decode("utf-8") == "MYKEY123"
+
+
+class TestParseTcp:
+    def test_parse_start_exe(self):
+        result = parse_tcp_command("STARTEXE|")
+        assert result is not None
+        assert result.command == TcpCommand.START_EXE
+        assert result.payload == ""
+
+    def test_parse_without_pipe(self):
+        result = parse_tcp_command("STARTEXE")
+        assert result is not None
+        assert result.command == TcpCommand.START_EXE
+        assert result.payload == ""
+
+    def test_parse_unknown_command(self):
+        assert parse_tcp_command("UNKNOWN|data") is None
+
+    def test_parse_with_payload(self):
+        result = parse_tcp_command("UPDATESELF|mydata")
+        assert result is not None
+        assert result.command == TcpCommand.UPDATE_SELF
+        assert result.payload == "mydata"

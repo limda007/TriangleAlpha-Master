@@ -274,6 +274,12 @@ class BigScreenInterface(ScrollArea):
         self._accountRefreshTimer.setInterval(100)
         self._accountRefreshTimer.timeout.connect(self._flushAccountRefresh)
 
+        # 账号表格防抖定时器（合并短时间内多次 _refreshAccountTable 调用）
+        self._account_refresh_timer = QTimer(self)
+        self._account_refresh_timer.setSingleShot(True)
+        self._account_refresh_timer.setInterval(300)  # 300ms debounce
+        self._account_refresh_timer.timeout.connect(self._doRefreshAccountTable)
+
         # ═══ 信号连接 ═══
         self._nm.node_online.connect(self._scheduleRefreshTable)
         self._nm.node_updated.connect(self._scheduleRefreshTable)
@@ -390,11 +396,12 @@ class BigScreenInterface(ScrollArea):
         self._refreshAccountStats()
         # 仅在账号面板可见时才加载全量账号表格，减少不必要的 DB 查询和内存分配
         if self._bottomWidget.isVisible():
-            self._refreshAccountTable()
+            self._doRefreshAccountTable()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._tableRefreshTimer.stop()
         self._accountRefreshTimer.stop()
+        self._account_refresh_timer.stop()
         self._offlineBatchTimer.stop()
         self._uptimeTimer.stop()
         self._watchdogTimer.stop()
@@ -1124,6 +1131,11 @@ class BigScreenInterface(ScrollArea):
         btn.setText(f"提取合格出货 ({count})" if count else "提取合格出货")
 
     def _refreshAccountTable(self) -> None:
+        """防抖：合并短时间内的多次刷新请求"""
+        if not self._account_refresh_timer.isActive():
+            self._account_refresh_timer.start()
+
+    def _doRefreshAccountTable(self) -> None:
         """从 AccountDB 刷新账号表格（仅显示空闲中）"""
         accounts = self._pool.get_idle_accounts()
         self.accountTable.setUpdatesEnabled(False)

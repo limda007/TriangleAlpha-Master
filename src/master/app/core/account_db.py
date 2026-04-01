@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
 CREATE INDEX IF NOT EXISTS idx_machine ON accounts(assigned_machine) WHERE assigned_machine != '';
+CREATE INDEX IF NOT EXISTS idx_username_status ON accounts(username, status);
 
 CREATE TRIGGER IF NOT EXISTS trg_updated AFTER UPDATE ON accounts
 BEGIN
@@ -492,13 +493,12 @@ class AccountDB(QObject):
         """平台确认账号已被取号 → 本地状态流转为 '已取号'"""
         if not usernames:
             return 0
-        total = 0
-        for username in usernames:
-            total += self._conn.execute(
-                "UPDATE accounts SET status='已取号' "
-                "WHERE username=? AND status='已完成'",
-                (username,),
-            ).rowcount
+        placeholders = ",".join("?" * len(usernames))
+        total = self._conn.execute(
+            f"UPDATE accounts SET status='已取号' "
+            f"WHERE username IN ({placeholders}) AND status='已完成'",
+            usernames,
+        ).rowcount
         if total:
             self._conn.commit()
             self._refresh_counts()
@@ -703,6 +703,7 @@ class AccountDB(QObject):
             CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
             CREATE INDEX IF NOT EXISTS idx_machine
                 ON accounts(assigned_machine) WHERE assigned_machine != '';
+            CREATE INDEX IF NOT EXISTS idx_username_status ON accounts(username, status);
             CREATE TRIGGER IF NOT EXISTS trg_updated AFTER UPDATE ON accounts
             BEGIN
                 UPDATE accounts SET updated_at = datetime('now','localtime')

@@ -107,6 +107,7 @@ class LogReporter:
                 # 连接断开，重置并重试
                 with contextlib.suppress(Exception):
                     writer.close()
+                    await writer.wait_closed()
                 self._writer = None
                 if attempt < 2:
                     await asyncio.sleep(2 ** (attempt + 1))

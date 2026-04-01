@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections import deque
 from datetime import datetime
 from typing import Any
 
@@ -31,7 +32,7 @@ class NodeManager(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.nodes: dict[str, NodeInfo] = {}
-        self.history: list[OperationRecord] = []
+        self.history: deque[OperationRecord] = deque(maxlen=_MAX_HISTORY)
         # P0: 缓存在线/总数，避免每次遍历
         self._online_count = 0
         self._total_count = 0
@@ -104,8 +105,6 @@ class NodeManager(QObject):
             result=result,
         )
         self.history.append(record)
-        if len(self.history) > _MAX_HISTORY:
-            self.history = self.history[-_MAX_HISTORY:]
         self.history_changed.emit()
 
     def get_nodes_by_group(self, group: str) -> list[NodeInfo]:

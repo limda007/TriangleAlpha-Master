@@ -4,8 +4,18 @@ from __future__ import annotations
 import base64
 import enum
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_float(s: str) -> float:
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
 UDP_PORT = 8888
 TCP_CMD_PORT = 9999
@@ -112,8 +122,8 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 type=UdpMessageType.EXT_ONLINE,
                 machine_name=parts[1],
                 user_name=parts[2],
-                cpu_percent=float(parts[3]) if parts[3].replace(".", "").isdigit() else 0.0,
-                mem_percent=float(parts[4]) if parts[4].replace(".", "").isdigit() else 0.0,
+                cpu_percent=_safe_float(parts[3]),
+                mem_percent=_safe_float(parts[4]),
                 slave_version=parts[5],
                 group=parts[6],
                 teammate_fill=parts[7] if len(parts) >= 8 else "",
@@ -123,7 +133,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 token_key=parts[11] if len(parts) >= 12 else "",
                 kami_code=parts[12] if len(parts) >= 13 else "",
             )
-        case "ACCOUNT_SYNC" if len(parts) >= 3:
+        case "ACCOUNT_SYNC" if len(parts) >= 3 and parts[2]:
             return UdpMessage(
                 type=UdpMessageType.ACCOUNT_SYNC,
                 machine_name=parts[1],
@@ -134,6 +144,7 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 type=UdpMessageType.NEED_ACCOUNT,
                 machine_name=parts[1],
             )
+    logger.debug("未识别的 UDP 消息: %s", parts[0] if parts else "(empty)")
     return None
 
 

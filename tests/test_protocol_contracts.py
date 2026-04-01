@@ -101,6 +101,5 @@ class TestUdpProtocolContracts:
     def test_account_sync_empty_payload(self):
         raw = "ACCOUNT_SYNC|VM-01|"
         parsed = parse_udp_message(raw)
-        # 空 payload 应能解析但 sync_payload 为空
-        assert parsed is not None
-        assert parsed.sync_payload == ""
+        # 空 payload 应被拒绝（防止无效同步）
+        assert parsed is None
