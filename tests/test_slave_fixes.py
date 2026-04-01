@@ -549,7 +549,10 @@ class TestH11SlaveSingleInstance:
         pid_path = tmp_path / ".slave.pid"
         pid_path.write_text("12345", encoding="utf-8")
 
-        with patch("slave.main.psutil.pid_exists", return_value=True):
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "TriangleAlpha-Slave.exe"
+        with patch("slave.main.psutil.pid_exists", return_value=True), \
+             patch("slave.main.psutil.Process", return_value=mock_proc):
             lock = acquire_instance_lock(pid_path)
 
         assert lock is None

@@ -187,7 +187,13 @@ def _read_lock_pid(pid_path: Path) -> int | None:
 
 
 def _is_pid_active(pid: int) -> bool:
-    return pid != os.getpid() and psutil.pid_exists(pid)
+    if pid == os.getpid() or not psutil.pid_exists(pid):
+        return False
+    try:
+        proc = psutil.Process(pid)
+        return "trianglealpha" in proc.name().lower() or "slave" in proc.name().lower()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
 
