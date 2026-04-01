@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -37,9 +38,9 @@ class SlaveStateStore:
         return SlaveSettings(group=self._as_text(data.get("group"), _DEFAULT_GROUP))
 
     def save_settings(self, settings: SlaveSettings) -> None:
-        self.settings_path.write_text(
+        self._atomic_write(
+            self.settings_path,
             json.dumps(settings.model_dump(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     def save_group(self, group: str) -> None:
@@ -178,10 +179,17 @@ class SlaveStateStore:
         return result
 
     def _save_account_login_state(self, state: dict[str, dict[str, object]]) -> None:
-        self.account_login_state_path.write_text(
+        self._atomic_write(
+            self.account_login_state_path,
             json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        """原子写入：先写临时文件再替换，防止崩溃时数据损坏。"""
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
 
     def _touch_login_state(
         self, state: dict[str, dict[str, object]], username: str, is_active: bool,

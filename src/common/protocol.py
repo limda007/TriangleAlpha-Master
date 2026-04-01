@@ -5,6 +5,7 @@ import base64
 import enum
 import hashlib
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 def _safe_float(s: str) -> float:
     try:
-        return float(s)
+        v = float(s)
+        return v if math.isfinite(v) else 0.0
     except (ValueError, TypeError):
         return 0.0
 

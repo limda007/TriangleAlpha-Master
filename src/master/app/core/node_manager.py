@@ -67,15 +67,16 @@ class NodeManager(QObject):
         changed = False
         for node in self.nodes.values():
             elapsed = (now - node.last_seen).total_seconds()
-            if node.status not in ("离线", "断连"):
-                if elapsed >= DISCONNECT_TIMEOUT:
-                    node.status = "断连"
-                    self.node_offline.emit(node.machine_name)
-                    changed = True
-                elif elapsed >= OFFLINE_TIMEOUT:
-                    node.status = "离线"
-                    self.node_offline.emit(node.machine_name)
-                    changed = True
+            if node.status == "断连":
+                continue
+            if elapsed >= DISCONNECT_TIMEOUT:
+                node.status = "断连"
+                self.node_offline.emit(node.machine_name)
+                changed = True
+            elif elapsed >= OFFLINE_TIMEOUT and node.status != "离线":
+                node.status = "离线"
+                self.node_offline.emit(node.machine_name)
+                changed = True
         if changed:
             self._recalc_online()
             self._schedule_stats()

@@ -686,19 +686,25 @@ class AccountDB(QObject):
         for old, new in _LEGACY_STATUS_MAP.items():
             case_expr += f"WHEN '{old}' THEN '{new}' "
         case_expr += "ELSE status END"
-        self._conn.execute(f"""
-            INSERT OR IGNORE INTO accounts_new
-                (username, password, bind_email, bind_email_pwd, notes,
-                 status, assigned_machine, level, jin_bi,
-                 completed_at, created_at, updated_at)
-            SELECT username, password, bind_email, bind_email_pwd, notes,
-                   {case_expr}, assigned_machine, level, jin_bi,
-                   completed_at, created_at, updated_at
-            FROM accounts
-        """)
-        self._conn.execute("DROP TABLE accounts")
-        self._conn.execute("ALTER TABLE accounts_new RENAME TO accounts")
-        # 重建索引和触发器
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(f"""
+                INSERT OR IGNORE INTO accounts_new
+                    (username, password, bind_email, bind_email_pwd, notes,
+                     status, assigned_machine, level, jin_bi,
+                     completed_at, created_at, updated_at)
+                SELECT username, password, bind_email, bind_email_pwd, notes,
+                       {case_expr}, assigned_machine, level, jin_bi,
+                       completed_at, created_at, updated_at
+                FROM accounts
+            """)
+            self._conn.execute("DROP TABLE accounts")
+            self._conn.execute("ALTER TABLE accounts_new RENAME TO accounts")
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        # 重建索引和触发器 (executescript implicitly commits)
         self._conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
             CREATE INDEX IF NOT EXISTS idx_machine
@@ -710,7 +716,6 @@ class AccountDB(QObject):
                     WHERE id = NEW.id;
             END;
         """)
-        self._conn.commit()
 
     def _refresh_counts(self) -> None:
         cur = self._conn.execute(

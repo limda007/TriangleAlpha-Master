@@ -1,7 +1,7 @@
 """GPU 显存监控：通过 nvidia-smi 获取 VRAM 使用情况。"""
 from __future__ import annotations
 
-import subprocess
+import asyncio
 import time
 
 from slave.logging_utils import get_logger
@@ -9,34 +9,38 @@ from slave.logging_utils import get_logger
 logger = get_logger(__name__)
 
 _CACHE_TTL = 10  # 缓存有效期（秒）
-_cache: dict[str, float | tuple[int, int]] = {"ts": 0.0, "val": (0, 0)}
+_cache_ts: float = 0.0
+_cache_val: tuple[int, int] = (0, 0)
 
 
-def get_vram_info() -> tuple[int, int]:
+async def get_vram_info() -> tuple[int, int]:
     """返回 (used_mb, total_mb)，不可用时返回 (0, 0)。"""
+    global _cache_ts, _cache_val
     now = time.monotonic()
-    if now - _cache["ts"] < _CACHE_TTL:  # type: ignore[operator]
-        return _cache["val"]  # type: ignore[return-value]
+    if now - _cache_ts < _CACHE_TTL:
+        return _cache_val
 
     used, total = 0, 0
     try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi", "--query-gpu=memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            line = result.stdout.strip().splitlines()[0]
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode == 0 and stdout:
+            line = stdout.decode("utf-8").strip().splitlines()[0]
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 2:
                 used, total = int(parts[0]), int(parts[1])
     except FileNotFoundError:
         pass
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         logger.debug("nvidia-smi 超时")
-    except (ValueError, IndexError) as exc:
+    except (ValueError, IndexError, OSError) as exc:
         logger.debug("nvidia-smi 解析失败: %s", exc)
 
-    _cache["ts"] = now
-    _cache["val"] = (used, total)
+    _cache_ts = now
+    _cache_val = (used, total)
     return used, total

@@ -107,7 +107,7 @@ class HeartbeatService:
                         loot_count = self._read_config("舔包次数.txt")
                         token_key = self._read_config("token.txt")
                         kami_code = self._read_kami_code()
-                        vram_used, vram_total = get_vram_info()
+                        vram_used, vram_total = await get_vram_info()
                         msg = build_udp_ext_online(
                             self._machine_name,
                             self._user_name,

@@ -192,7 +192,7 @@ def _is_pid_active(pid: int) -> bool:
 
 
 def acquire_instance_lock(pid_path: Path) -> InstanceLock | None:
-    while True:
+    for _ in range(10):
         try:
             fd = os.open(pid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -201,10 +201,12 @@ def acquire_instance_lock(pid_path: Path) -> InstanceLock | None:
                 return None
             with contextlib.suppress(FileNotFoundError):
                 pid_path.unlink()
+            time.sleep(0.1)
             continue
         with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as fh:
             fh.write(str(os.getpid()))
         return InstanceLock(pid_path, fd)
+    return None
 
 
 def _read_master_ip(base_dir: Path) -> str | None:

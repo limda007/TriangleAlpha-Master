@@ -325,6 +325,9 @@ class KamiInterface(ScrollArea):
         self.btnImport.setEnabled(True)
         self.btnRefresh.setEnabled(True)
         if self._worker is not None:
+            if self._worker.isRunning():
+                self._worker.quit()
+                self._worker.wait(3000)
             self._worker.deleteLater()
             self._worker = None
 

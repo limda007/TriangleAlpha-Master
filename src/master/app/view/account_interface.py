@@ -66,7 +66,7 @@ class AccountInterface(ScrollArea):
         super().__init__(parent)
         self.setObjectName("accountInterface")
         self._pool = account_pool
-        self._revealed: set[int] = set()  # rows with password revealed
+        self._revealed: set[tuple[int, int]] = set()  # (row, col) with secret revealed
 
         self.view = QWidget(self)
         self.view.setObjectName("view")
@@ -216,16 +216,18 @@ class AccountInterface(ScrollArea):
     def _onCellClicked(self, row: int, col: int) -> None:
         if col not in _SECRET_COLS:
             return
+        key = (row, col)
         item = self.table.item(row, col)
         if not item:
             return
-        real_val = str(item.data(Qt.ItemDataRole.UserRole))
-        if row in self._revealed:
+        if key in self._revealed:
             item.setText(_MASK)
-            self._revealed.discard(row)
+            self._revealed.discard(key)
         else:
-            item.setText(real_val)
-            self._revealed.add(row)
+            raw = item.data(Qt.ItemDataRole.UserRole)
+            if raw:
+                item.setText(str(raw))
+                self._revealed.add(key)
 
     def _applyFilter(self) -> None:
         status_text = self.statusFilter.currentText()
