@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime
+from typing import Any
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -147,7 +148,7 @@ class NodeManager(QObject):
 
     # ── 内部处理 ───────────────────────────────────────────
 
-    def _upsert_node(self, msg: UdpMessage, remote_ip: str, **extra: object) -> None:
+    def _upsert_node(self, msg: UdpMessage, remote_ip: str, **extra: Any) -> None:
         """创建或更新节点，发射信号。extra 为 EXT_ONLINE 的扩展字段。"""
         name = msg.machine_name
         is_new = name not in self.nodes
