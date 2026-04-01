@@ -131,20 +131,43 @@ class SlaveStateStore:
         return result
 
     def get_active_login_at(self) -> str:
-        """获取当前活跃账号的 last_login_at 时间戳。"""
+        """获取当前活跃账号的登录时间戳。
+
+        优先使用 TestDemo 的 LastLoginTime（实际游戏登录时刻），
+        回退到 account_login_state.json 的 last_login_at（slave 分配时刻）。
+        """
         accounts = self._read_json(self._base_dir / "accounts.json")
         if not isinstance(accounts, list):
             return ""
-        active_username = ""
+        active_acc: dict | None = None
         for acc in accounts:
             if isinstance(acc, dict) and acc.get("IsActive"):
-                active_username = self._as_text(acc.get("Username"), "")
+                active_acc = acc
                 break
+        if active_acc is None:
+            return ""
+        active_username = self._as_text(active_acc.get("Username"), "")
         if not active_username:
             return ""
+        # 优先: TestDemo 写入的 LastLoginTime (ISO 格式)
+        last_login_time = self._as_text(active_acc.get("LastLoginTime"), "")
+        if last_login_time:
+            parsed = self._parse_iso_to_local(last_login_time)
+            if parsed:
+                return parsed
+        # 回退: slave 持久化的 last_login_at
         login_state = self._load_account_login_state()
         state = login_state.get(active_username, {})
         return self._as_text(state.get("last_login_at"), "")
+
+    @staticmethod
+    def _parse_iso_to_local(iso_str: str) -> str:
+        """将 ISO 8601 时间戳转为 '%Y-%m-%d %H:%M:%S' 本地时间。"""
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return ""
 
     def clear_runtime_status(self) -> None:
         try:
