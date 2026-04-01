@@ -28,8 +28,9 @@ class ProcessWatcher:
     _GAME_PATH_KEYWORDS = ("steamapps", "delta force", "tencent", "wegame", "qbblink")
     _RECOVERY_SEC = 60
     _MAX_RESTART = 3
-    _IPC_STALE_SEC = 60
+    _IPC_STALE_SEC = 300  # IPC 静默阈值（秒），需覆盖老设备(GTX750)启动+登录+切号全流程
     _IPC_RESTART_COOLDOWN = 120
+    _MAX_IPC_RESTART = 2  # IPC 静默重启上限，防止无限循环
 
     def __init__(
         self,
@@ -63,6 +64,7 @@ class ProcessWatcher:
         testdemo_ever_alive = False
         ipc_restart_cooldown: float = 0
         restart_count = 0
+        ipc_restart_count = 0
 
         while self._running:
             testdemo_alive = is_process_alive("testdemo")
@@ -85,6 +87,7 @@ class ProcessWatcher:
                 testdemo_down_since = None
                 testdemo_ever_alive = False
                 restart_count = 0
+                ipc_restart_count = 0
                 self._on_stopped()
 
             # TestDemo 挂了但 Launcher 还在 → 等恢复期后重启 Launcher
@@ -130,17 +133,32 @@ class ProcessWatcher:
                 and (ipc_silent or ipc_never_started)
                 and now - ipc_restart_cooldown >= self._IPC_RESTART_COOLDOWN
             ):
-                if ipc_never_started:
-                    logger.warning("TestDemo 运行 %.0fs 从未发送 IPC，疑似卡死，重启 Launcher", script_running_secs)
+                if ipc_restart_count >= self._MAX_IPC_RESTART:
+                    if ipc_restart_count == self._MAX_IPC_RESTART:
+                        logger.error(
+                            "IPC 静默重启已达上限 %d 次，停止重试",
+                            ipc_restart_count,
+                        )
+                        ipc_restart_count += 1
                 else:
-                    logger.warning("TestDemo IPC 静默 %.0fs，疑似卡死，重启 Launcher", ipc_age)
-                ipc_restart_cooldown = now
-                try:
-                    await pm.kill_by_name("TriangleAlpha.Launcher")
-                    await asyncio.sleep(2)
-                    await pm.start_launcher()
-                except (OSError, psutil.Error):
-                    logger.exception("重启 Launcher 失败 (IPC 超时)")
+                    ipc_restart_count += 1
+                    if ipc_never_started:
+                        logger.warning(
+                            "TestDemo 运行 %.0fs 从未发送 IPC，疑似卡死，重启 Launcher (%d/%d)",
+                            script_running_secs, ipc_restart_count, self._MAX_IPC_RESTART,
+                        )
+                    else:
+                        logger.warning(
+                            "TestDemo IPC 静默 %.0fs，疑似卡死，重启 Launcher (%d/%d)",
+                            ipc_age, ipc_restart_count, self._MAX_IPC_RESTART,
+                        )
+                    ipc_restart_cooldown = now
+                    try:
+                        await pm.kill_by_name("TriangleAlpha.Launcher")
+                        await asyncio.sleep(2)
+                        await pm.start_launcher()
+                    except (OSError, psutil.Error):
+                        logger.exception("重启 Launcher 失败 (IPC 超时)")
 
             was_running = running
             if ipc_data is not None:

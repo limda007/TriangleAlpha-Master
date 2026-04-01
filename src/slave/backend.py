@@ -184,6 +184,7 @@ class SlaveBackend(QThread):
 
     def _on_script_stopped(self) -> None:
         self._script_started_at = None
+        self._ipc.clear_snapshot()
         try:
             self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
             self._state_store.clear_runtime_status()
