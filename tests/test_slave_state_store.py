@@ -11,6 +11,7 @@ import pytest
 
 from common.protocol import GameState
 from slave.backend import SlaveBackend
+from slave.models import IpcData
 from slave.state_store import RuntimeStatus, SlaveStateStore
 
 
@@ -358,7 +359,6 @@ class TestIpcPriorityInSnapshot:
     def test_ipc_data_takes_priority_over_file(self, tmp_path: Path):
         """IPC 有效时忽略文件。"""
         from slave.backend import SlaveBackend
-        from slave.ipc_receiver import LocalIpcReceiver
 
         backend = SlaveBackend(tmp_path, None)
         backend._script_started_at = time.time() - 30
@@ -369,14 +369,11 @@ class TestIpcPriorityInSnapshot:
             encoding="utf-8",
         )
 
-        backend._ipc = LocalIpcReceiver()
-        backend._ipc._on_message({
-            "account": "ipc-acc", "level": "20",
-            "jinbi": "9999", "status_text": "运行中", "elapsed": "100",
-        })
+        backend._ipc._on_message(IpcData(
+            level="20", jinbi="9999", status_text="运行中", elapsed="100",
+        ))
 
         snapshot = backend._load_runtime_snapshot()
-        assert snapshot.current_account == "ipc-acc"
         assert snapshot.level == 20
         assert snapshot.jin_bi == "9999"
         assert snapshot.elapsed == "100"
@@ -384,7 +381,6 @@ class TestIpcPriorityInSnapshot:
     def test_stale_ipc_falls_back_to_file(self, tmp_path: Path):
         """IPC 过期（>15s）时回退到文件。"""
         from slave.backend import SlaveBackend
-        from slave.ipc_receiver import LocalIpcReceiver
 
         backend = SlaveBackend(tmp_path, None)
         backend._script_started_at = time.time() - 30
@@ -395,11 +391,9 @@ class TestIpcPriorityInSnapshot:
             encoding="utf-8",
         )
 
-        backend._ipc = LocalIpcReceiver()
-        backend._ipc._data = {
-            "account": "old-ipc", "level": "10",
-            "jinbi": "500", "status_text": "运行中", "elapsed": "30",
-        }
+        backend._ipc._data = IpcData(
+            level="10", jinbi="500", status_text="运行中", elapsed="30",
+        )
         backend._ipc._last_sync = time.monotonic() - 20  # 过期 20s
 
         snapshot = backend._load_runtime_snapshot()
@@ -409,7 +403,6 @@ class TestIpcPriorityInSnapshot:
     def test_no_ipc_uses_file(self, tmp_path: Path):
         """无 IPC 数据时正常使用文件。"""
         from slave.backend import SlaveBackend
-        from slave.ipc_receiver import LocalIpcReceiver
 
         backend = SlaveBackend(tmp_path, None)
         backend._script_started_at = time.time() - 10
@@ -420,7 +413,7 @@ class TestIpcPriorityInSnapshot:
             encoding="utf-8",
         )
 
-        backend._ipc = LocalIpcReceiver()
+        backend._ipc.clear_snapshot()
 
         snapshot = backend._load_runtime_snapshot()
         assert snapshot.current_account == ""
@@ -433,13 +426,9 @@ class TestIpcPriorityInSnapshot:
             encoding="utf-8",
         )
         backend._last_ipc_jin_bi = "9999"
-        backend._ipc._on_message({
-            "account": "stale-user",
-            "level": "12",
-            "jinbi": "9999",
-            "status_text": "运行中",
-            "elapsed": "30",
-        })
+        backend._ipc._on_message(IpcData(
+            level="12", jinbi="9999", status_text="运行中", elapsed="30",
+        ))
 
         backend._on_account_updated(2)
 

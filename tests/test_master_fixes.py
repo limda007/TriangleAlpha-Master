@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -113,6 +114,77 @@ class TestC3TcpSocketClose:
         mock_sock.close.assert_called_once()
         commander.command_failed.emit.assert_not_called()
         commander.command_sent.emit.assert_called_once()
+
+
+class TestC4UdpListenerOversizeDatagram:
+    """验证 UDP 监听对超大数据报容错。"""
+
+    def test_oversize_datagram_is_ignored_and_listener_continues(self):
+        from master.app.core.udp_listener import UdpListenerThread
+
+        calls: list[int] = []
+        received: list[tuple[object, str]] = []
+
+        class FakeSocket:
+            def setsockopt(self, *_args) -> None:
+                return None
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def bind(self, _addr: tuple[str, int]) -> None:
+                return None
+
+            def recvfrom(self, size: int) -> tuple[bytes, tuple[str, int]]:
+                calls.append(size)
+                if len(calls) == 1:
+                    raise OSError(10040, "Message too long")
+                listener._running = False
+                return (b"ONLINE|VM-01|Admin", ("127.0.0.1", 8888))
+
+            def close(self) -> None:
+                return None
+
+        listener = UdpListenerThread(port=0)
+        listener.message_received.connect(lambda msg, ip: received.append((msg, ip)))
+
+        with patch("master.app.core.udp_listener.socket.socket", return_value=FakeSocket()):
+            listener.run()
+
+        assert calls == [65_535, 65_535]
+        assert len(received) == 1
+        assert received[0][1] == "127.0.0.1"
+
+
+class TestC5MainWindowShutdownGuards:
+    """验证主窗口关闭阶段不会继续访问已关闭数据库。"""
+
+    def test_auto_fix_token_key_skips_when_window_is_closing(self):
+        from master.app.view.main_window import MainWindow
+
+        class GuardPool:
+            is_closed = False
+
+            def __init__(self) -> None:
+                self.called = False
+
+            def get_config(self, _key: str, default: str = "") -> str:
+                self.called = True
+                return default
+
+        pool = GuardPool()
+        window = SimpleNamespace(
+            _is_closing=True,
+            accountPool=pool,
+            nodeManager=SimpleNamespace(nodes={}),
+            _tokenPushedAt={},
+            _TOKEN_PUSH_RETRY_SEC=30,
+            tcpCommander=MagicMock(),
+        )
+
+        MainWindow._autoFixTokenKey(window, "VM-01")
+
+        assert pool.called is False
 
 
 # ── H3: 操作历史动态过滤基础 ──

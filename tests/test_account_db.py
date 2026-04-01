@@ -57,6 +57,14 @@ class TestImport:
         with pytest.raises(OSError, match="无法读取"):
             db.load_from_file("/nonexistent/path.txt")
 
+    def test_get_config_returns_default_after_close(self, tmp_path: Path) -> None:
+        db = AccountDB(tmp_path / "closed.db")
+        db.set_config("api_key", "secret")
+
+        db.close()
+
+        assert db.get_config("api_key", "fallback") == "fallback"
+
     def test_empty_lines_ignored(self, db: AccountDB) -> None:
         db.import_fresh("u1----p1\n\n  \nu2----p2\n")
         assert db.total_count == 2

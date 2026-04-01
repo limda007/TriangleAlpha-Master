@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from common.protocol import LOCAL_IPC_PORT
 from slave.logging_utils import get_logger
+from slave.models import IpcData
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def parse_ipc_status(data: bytes) -> dict[str, str] | None:
+def parse_ipc_status(data: bytes) -> IpcData | None:
     """解析 TestDemo 本地 IPC 消息。
 
     格式: STATUS|<ignored>|{account}|{level}|{jinbi}|{status_text}|{elapsed}
@@ -33,18 +34,18 @@ def parse_ipc_status(data: bytes) -> dict[str, str] | None:
     parts = text.split("|")
     if len(parts) < 7 or parts[0] != "STATUS":
         return None
-    return {
-        "level": parts[3],
-        "jinbi": parts[4],
-        "status_text": parts[5],
-        "elapsed": parts[6],
-    }
+    return IpcData(
+        level=parts[3],
+        jinbi=parts[4],
+        status_text=parts[5],
+        elapsed=parts[6],
+    )
 
 
 class _IpcProtocol(asyncio.DatagramProtocol):
     """asyncio DatagramProtocol，将收到的 UDP 包交给回调处理。"""
 
-    def __init__(self, callback: Callable[[dict[str, str]], None]) -> None:
+    def __init__(self, callback: Callable[[IpcData], None]) -> None:
         self._callback = callback
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -66,7 +67,7 @@ class LocalIpcReceiver:
 
     def __init__(self, port: int = LOCAL_IPC_PORT) -> None:
         self._port = port
-        self._data: dict[str, str] | None = None
+        self._data: IpcData | None = None
         self._last_sync: float = 0.0
 
     async def run(self) -> None:
@@ -83,27 +84,26 @@ class LocalIpcReceiver:
             transport.close()
             logger.info("本地 IPC 监听已关闭")
 
-    def snapshot(self) -> tuple[dict[str, str] | None, float]:
+    def snapshot(self) -> tuple[IpcData | None, float]:
         """返回 (最新IPC数据副本, 距上次更新的秒数)。
 
-        无数据时返回 (None, inf)。数据是副本，修改不影响内部状态。
+        无数据时返回 (None, inf)。数据是 frozen Pydantic 模型，天然不可变。
         """
         if self._data is None:
             return None, float("inf")
         age = time.monotonic() - self._last_sync
-        return dict(self._data), age
+        return self._data, age
 
     def clear_snapshot(self) -> None:
         """清空缓存，避免换号后沿用旧 IPC 状态。"""
         self._data = None
         self._last_sync = 0.0
 
-    def _on_message(self, data: dict[str, str]) -> None:
+    def _on_message(self, data: IpcData) -> None:
         self._data = data
         self._last_sync = time.monotonic()
         logger.debug(
-            "IPC 收到: account=%s level=%s status=%s",
-            data.get("account", ""),
-            data.get("level", ""),
-            data.get("status_text", ""),
+            "IPC 收到: level=%s status=%s",
+            data.level,
+            data.status_text,
         )

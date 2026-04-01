@@ -2,31 +2,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import cast
 
 from common.protocol import GameState
 from slave.logging_utils import get_logger
+from slave.models import RuntimeStatus, SlaveSettings
 
 logger = get_logger(__name__)
 _DEFAULT_GROUP = "默认"
-
-
-@dataclass(frozen=True)
-class SlaveSettings:
-    group: str = _DEFAULT_GROUP
-
-
-@dataclass(frozen=True)
-class RuntimeStatus:
-    state: str = GameState.RUNNING
-    level: int = 0
-    jin_bi: str = "0"
-    current_account: str = ""
-    elapsed: str = "0"
-    status_text: str = ""  # IPC 原始状态文本（如 "等待匹配"/"正在对局"）
 
 
 class SlaveStateStore:
@@ -53,7 +38,7 @@ class SlaveStateStore:
 
     def save_settings(self, settings: SlaveSettings) -> None:
         self.settings_path.write_text(
-            json.dumps(asdict(settings), ensure_ascii=False, indent=2),
+            json.dumps(settings.model_dump(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 

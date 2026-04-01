@@ -7,6 +7,9 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from common.protocol import UDP_PORT, parse_udp_message
 
+_MAX_UDP_PACKET_SIZE = 65_535
+_WSAEMSGSIZE = 10040
+
 
 class UdpListenerThread(QThread):
     """后台线程，绑定 UDP 端口接收被控端广播消息"""
@@ -31,9 +34,16 @@ class UdpListenerThread(QThread):
             sock.bind(("", self._port))
             while self._running:
                 try:
-                    data, addr = sock.recvfrom(4096)
+                    data, addr = sock.recvfrom(_MAX_UDP_PACKET_SIZE)
                 except TimeoutError:
                     continue
+                except OSError as exc:
+                    if (
+                        exc.errno in {getattr(socket, "EMSGSIZE", None), _WSAEMSGSIZE}
+                        or getattr(exc, "winerror", None) == _WSAEMSGSIZE
+                    ):
+                        continue
+                    raise
                 raw = data.decode("utf-8", errors="ignore").strip()
                 if not raw:
                     continue

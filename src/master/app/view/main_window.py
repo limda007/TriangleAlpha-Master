@@ -1,6 +1,7 @@
 """主窗口"""
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from datetime import datetime, timedelta
@@ -55,6 +56,7 @@ def _ensure_bound_account_cache(window: object) -> dict[str, str]:
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
+        self._is_closing = False
 
         # 核心服务
         self.nodeManager = NodeManager(self)
@@ -158,12 +160,27 @@ class MainWindow(FluentWindow):
             self.move(geo.width() // 2 - self.width() // 2, geo.height() // 2 - self.height() // 2)
 
     def closeEvent(self, e):
+        self._is_closing = True
+        self._timeoutTimer.stop()
+        self._purgeTimer.stop()
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.node_online.disconnect(self._onNodeReconnect)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.node_updated.disconnect(self._autoFixTokenKey)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.node_status_reported.disconnect(self._syncAccountFromNode)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.node_status_reported.disconnect(self._retry_missed_account_request)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.account_sync_received.disconnect(self._onAccountSync)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self.nodeManager.need_account.disconnect(self._onNeedAccount)
         self.platformSyncer.stop()      # 首行，确保 worker 停止
-        self.kamiDB.close()
-        self.accountPool.close()
         self.udpListener.stop()
         self.logReceiver.stop()
         self.tcpCommander.stop()
+        self.kamiDB.close()
+        self.accountPool.close()
         super().closeEvent(e)
 
     def _fixMacOSTitleBar(self) -> None:
@@ -262,6 +279,8 @@ class MainWindow(FluentWindow):
 
     def _autoFixTokenKey(self, machine_name: str) -> None:
         """节点缺少或 Key 不一致时自动下发正确的验证码 Key"""
+        if self._is_closing or self.accountPool.is_closed:
+            return
         master_key = self.accountPool.get_config("api_key")
         if not master_key:
             return

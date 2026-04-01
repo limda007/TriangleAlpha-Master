@@ -14,15 +14,18 @@ from pathlib import Path
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from common.protocol import HEARTBEAT_INTERVAL, IPC_TIMEOUT, GameState
+from common.protocol import HEARTBEAT_INTERVAL, GameState
 from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
 from slave.command_handler import CommandHandler
 from slave.heartbeat import HeartbeatService
 from slave.ipc_receiver import LocalIpcReceiver
 from slave.log_reporter import LogReporter
 from slave.logging_utils import configure_slave_logging, get_logger
+from slave.models import RuntimeStatus
 from slave.process_manager import ProcessManager
-from slave.state_store import RuntimeStatus, SlaveStateStore
+from slave.process_watcher import ProcessWatcher, is_process_alive, is_testdemo_running, kill_browsers
+from slave.state_store import SlaveStateStore
+from slave.status_aggregator import StatusAggregator, is_waiting_for_account, map_ipc_status
 
 logger = get_logger(__name__)
 
@@ -51,10 +54,43 @@ class SlaveBackend(QThread):
         self._tasks: list[asyncio.Task[None]] = []
         self._state_store = SlaveStateStore(base_dir)
         self._script_running = False
-        self._script_started_at: float | None = None
+        self.__script_started_at: float | None = None
         self._ipc = LocalIpcReceiver()
-        self._last_ipc_jin_bi: str = "0"  # IPC 金币高水位缓存，防止回退时暴降
-        self._last_need_account_request_at: float = 0.0
+        self._status_agg = StatusAggregator(self._state_store, self._ipc)
+        self._process_watcher = ProcessWatcher(
+            base_dir,
+            self._ipc,
+            on_script_status=self._on_process_status,
+            on_started=self._on_script_started,
+            on_stopped=self._on_script_stopped,
+        )
+
+    # ── property proxies: 保持测试兼容 ──
+
+    @property
+    def _script_started_at(self) -> float | None:
+        return self.__script_started_at
+
+    @_script_started_at.setter
+    def _script_started_at(self, value: float | None) -> None:
+        self.__script_started_at = value
+        self._status_agg.set_script_started_at(value)
+
+    @property
+    def _last_ipc_jin_bi(self) -> str:
+        return self._status_agg.last_ipc_jin_bi
+
+    @_last_ipc_jin_bi.setter
+    def _last_ipc_jin_bi(self, value: str) -> None:
+        self._status_agg.last_ipc_jin_bi = value
+
+    @property
+    def _last_need_account_request_at(self) -> float:
+        return self._status_agg.last_need_account_request_at
+
+    @_last_need_account_request_at.setter
+    def _last_need_account_request_at(self, value: float) -> None:
+        self._status_agg.last_need_account_request_at = value
 
     def run(self) -> None:
         """QThread 入口。"""
@@ -112,7 +148,7 @@ class SlaveBackend(QThread):
             asyncio.create_task(log_reporter.run()),
             asyncio.create_task(kill_remote_controls(self._base_dir)),
             asyncio.create_task(self._status_writer(self._base_dir, self._heartbeat, start_time)),
-            asyncio.create_task(self._process_monitor()),
+            asyncio.create_task(self._process_watcher.run()),
             asyncio.create_task(self._status_reporter()),
             asyncio.create_task(self._account_sync()),
             asyncio.create_task(self._ipc.run()),
@@ -138,11 +174,8 @@ class SlaveBackend(QThread):
         self.command_received.emit(desc)
 
     def _on_account_updated(self, count: int) -> None:
-        # 新账号下发后立即丢弃本地旧运行态，避免旧号通过磁盘/IPC 缓存回流。
         self._state_store.clear_runtime_status()
-        self._last_ipc_jin_bi = "0"
-        self._last_need_account_request_at = 0.0
-        self._ipc.clear_snapshot()
+        self._status_agg.reset_ipc_state()
         self.account_updated.emit(count)
 
     def _on_group_changed(self, group: str) -> None:
@@ -176,8 +209,6 @@ class SlaveBackend(QThread):
         testdemo_ever_alive = False  # TestDemo 是否曾经运行过
         _RECOVERY_SEC = 60  # 给 TestDemo 60 秒恢复期
         _MAX_RESTART = 3  # TestDemo 崩溃重启 Launcher 的最大次数
-        _IPC_STALE_SEC = 60  # TestDemo IPC 静默超过此时间则重启 Launcher
-        ipc_restart_cooldown: float = 0  # 上次 IPC 触发重启的时间戳
         restart_count = 0  # 连续重启 Launcher 的次数
         while self._running:
             testdemo_alive = self._is_process_alive("testdemo")
@@ -237,32 +268,7 @@ class SlaveBackend(QThread):
             else:
                 testdemo_down_since = None
 
-            # TestDemo 存活但 IPC 静默超过阈值 → 可能卡死，重启 Launcher
-            # 两种情形均触发：① 曾收到 IPC 但超时 ② 从未收到 IPC 且进程已运行 ≥ 阈值
-            ipc_data, ipc_age = self._ipc.snapshot()
-            now = time.time()
-            ipc_ever_received = ipc_data is not None
-            script_running_secs = (
-                now - self._script_started_at if self._script_started_at else 0
-            )
-            ipc_silent = ipc_ever_received and ipc_age >= _IPC_STALE_SEC
-            ipc_never_started = not ipc_ever_received and script_running_secs >= _IPC_STALE_SEC
-            if (
-                testdemo_alive
-                and (ipc_silent or ipc_never_started)
-                and now - ipc_restart_cooldown >= 120  # 2 分钟冷却，防连续重启
-            ):
-                if ipc_never_started:
-                    logger.warning("TestDemo 运行 %.0fs 从未发送 IPC，疑似卡死，重启 Launcher", script_running_secs)
-                else:
-                    logger.warning("TestDemo IPC 静默 %.0fs，疑似卡死，重启 Launcher", ipc_age)
-                ipc_restart_cooldown = now
-                try:
-                    await pm.kill_by_name("TriangleAlpha.Launcher")
-                    await asyncio.sleep(2)
-                    await pm.start_launcher()
-                except Exception:
-                    logger.exception("重启 Launcher 失败 (IPC 超时)")
+            ipc_data, _ipc_age = self._ipc.snapshot()
 
             was_running = running
             # 关闭弹窗浏览器（游戏安全中心等无用页面）
@@ -348,14 +354,7 @@ class SlaveBackend(QThread):
 
     @classmethod
     def _is_waiting_for_account(cls, snapshot: RuntimeStatus) -> bool:
-        if snapshot.state != GameState.RUNNING:
-            return False
-        if snapshot.current_account.strip():
-            return False
-        status_text = snapshot.status_text.strip()
-        if not status_text:
-            return False
-        return any(keyword in status_text for keyword in cls._NEED_ACCOUNT_STATUS_KEYWORDS)
+        return is_waiting_for_account(snapshot)
 
     def _retry_need_account_if_needed(
         self,
@@ -364,93 +363,19 @@ class SlaveBackend(QThread):
         *,
         now_monotonic: float | None = None,
     ) -> bool:
-        if not self._is_waiting_for_account(snapshot):
-            self._last_need_account_request_at = 0.0
-            return False
-        now = time.monotonic() if now_monotonic is None else now_monotonic
-        if (
-            self._last_need_account_request_at > 0
-            and now - self._last_need_account_request_at < self._NEED_ACCOUNT_RETRY_SEC
-        ):
-            return False
-        heartbeat.send_need_account()
-        self._last_need_account_request_at = now
-        logger.info("检测到等待账号状态，补发 NEED_ACCOUNT")
-        return True
+        return self._status_agg.retry_need_account_if_needed(
+            snapshot,
+            heartbeat.send_need_account,
+            now_monotonic=now_monotonic,
+        )
 
     def _load_runtime_snapshot(self) -> RuntimeStatus:
-        default_elapsed = "0"
-        if self._script_started_at is not None:
-            default_elapsed = str(max(0, int(time.time() - self._script_started_at)))
-
-        # 始终从 accounts.json 获取当前活跃账号（IsActive=true）
-        active_acc = self._state_store.load_active_account(default_elapsed=default_elapsed)
-        active_name = active_acc.current_account if active_acc else ""
-        active_level = active_acc.level if active_acc else 0
-        active_jin_bi = active_acc.jin_bi if active_acc else "0"
-
-        # ── IPC 优先：从 TestDemo 本地 UDP 推送获取实时数据 ──
-        ipc_data, ipc_age = self._ipc.snapshot()
-        if ipc_data is not None and ipc_age < IPC_TIMEOUT:
-            # 缓存最新 IPC 数据，供 IPC 超时时沿用
-            self._last_ipc_jin_bi = ipc_data.get("jinbi", "0")
-            raw_status = ipc_data.get("status_text", "")
-            level_raw = ipc_data.get("level", "0")
-            current_account = str(ipc_data.get("account") or ipc_data.get("desc") or active_name)
-            return RuntimeStatus(
-                state=self._map_ipc_status(raw_status),
-                level=int(level_raw) if level_raw.isdigit() else 0,
-                jin_bi=self._last_ipc_jin_bi,
-                current_account=current_account,
-                elapsed=ipc_data.get("elapsed", default_elapsed),
-                status_text=raw_status,
-            )
-
-        # ── IPC 刚超时但有缓存：沿用最后 IPC 数据，避免文件回退导致金币跳变 ──
-        if ipc_data is not None and self._last_ipc_jin_bi != "0":
-            raw_status = ipc_data.get("status_text", "")
-            level_raw = ipc_data.get("level", "0")
-            current_account = str(ipc_data.get("account") or ipc_data.get("desc") or active_name)
-            return RuntimeStatus(
-                state=self._map_ipc_status(raw_status),
-                level=int(level_raw) if level_raw.isdigit() else 0,
-                jin_bi=self._last_ipc_jin_bi,
-                current_account=current_account,
-                elapsed=ipc_data.get("elapsed", default_elapsed),
-                status_text=raw_status,
-            )
-
-        # ── 文件兜底：仅读取数值状态，不再信任磁盘里的 current_account ──
-        snapshot = self._state_store.load_runtime_status(default_elapsed=default_elapsed)
-        snapshot = RuntimeStatus(
-            state=snapshot.state,
-            level=snapshot.level or active_level,
-            jin_bi=snapshot.jin_bi if snapshot.jin_bi != "0" else active_jin_bi,
-            current_account=active_name,
-            elapsed=snapshot.elapsed,
-            status_text=snapshot.status_text,
-        )
-        if snapshot.state == GameState.SCRIPT_STOPPED:
-            return RuntimeStatus(
-                state=GameState.RUNNING,
-                level=snapshot.level,
-                jin_bi=snapshot.jin_bi,
-                current_account=snapshot.current_account,
-                elapsed=snapshot.elapsed,
-            )
-        return snapshot
+        return self._status_agg.load_runtime_snapshot()
 
     @staticmethod
     def _map_ipc_status(text: str) -> str:
         """将 TestDemo IPC 上报的状态文字映射为 GameState 值。"""
-        if not text:
-            return GameState.RUNNING
-        # 精确匹配"已完成"，避免"完成过关"等中间状态被误判
-        if text == "已完成":
-            return GameState.COMPLETED
-        if "停" in text or "退出" in text:
-            return GameState.SCRIPT_STOPPED
-        return GameState.RUNNING
+        return map_ipc_status(text)
 
     async def _status_writer(self, base_dir: Path, heartbeat: HeartbeatService, start_time: float) -> None:
         """定期写入 slave_status.json。"""

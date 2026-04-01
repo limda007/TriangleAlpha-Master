@@ -68,6 +68,7 @@ class AccountDB(QObject):
     def __init__(self, db_path: str | Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db_path = str(db_path)
+        self._closed = False
         self._conn: sqlite3.Connection = sqlite3.connect(
             self._db_path, timeout=10, isolation_level=None,
         )
@@ -91,13 +92,23 @@ class AccountDB(QObject):
 
     def close(self) -> None:
         """关闭数据库连接"""
+        if self._closed:
+            return
+        self._closed = True
         with contextlib.suppress(Exception):
             self._conn.close()
+
+    @property
+    def is_closed(self) -> bool:
+        """连接是否已显式关闭。"""
+        return self._closed
 
     # ── 配置键值存取 ──
 
     def get_config(self, key: str, default: str = "") -> str:
         """读取配置项"""
+        if self._closed:
+            return default
         row = self._conn.execute(
             "SELECT value FROM config WHERE key = ?", (key,),
         ).fetchone()
