@@ -147,63 +147,45 @@ class NodeManager(QObject):
 
     # ── 内部处理 ───────────────────────────────────────────
 
-    def _handle_online(self, msg: UdpMessage, remote_ip: str) -> None:
-        name = msg.machine_name
-        is_new = name not in self.nodes
-        if is_new:
-            self.nodes[name] = NodeInfo(machine_name=name, ip=remote_ip, user_name=msg.user_name)
-        else:
-            node = self.nodes[name]
-            node.ip = remote_ip
-            node.user_name = msg.user_name
-            node.status = "在线"
-            node.last_seen = datetime.now()
-        if is_new:
-            self.node_online.emit(name)
-        self.node_updated.emit(name)
-        self._recalc_online()
-        self._schedule_stats()
-
-    def _handle_ext_online(self, msg: UdpMessage, remote_ip: str) -> None:
+    def _upsert_node(self, msg: UdpMessage, remote_ip: str, **extra: object) -> None:
+        """创建或更新节点，发射信号。extra 为 EXT_ONLINE 的扩展字段。"""
         name = msg.machine_name
         is_new = name not in self.nodes
         if is_new:
             self.nodes[name] = NodeInfo(
-                machine_name=name,
-                ip=remote_ip,
-                user_name=msg.user_name,
-                group=msg.group,
-                cpu_percent=msg.cpu_percent,
-                mem_percent=msg.mem_percent,
-                slave_version=msg.slave_version,
-                teammate_fill=msg.teammate_fill,
-                weapon_config=msg.weapon_config,
-                level_threshold=msg.level_threshold,
-                loot_count=msg.loot_count,
-                token_key=msg.token_key,
-                kami_code=msg.kami_code,
+                machine_name=name, ip=remote_ip, user_name=msg.user_name, **extra,
             )
         else:
             node = self.nodes[name]
             node.ip = remote_ip
             node.user_name = msg.user_name
             node.status = "在线"
-            node.group = msg.group
-            node.cpu_percent = msg.cpu_percent
-            node.mem_percent = msg.mem_percent
-            node.slave_version = msg.slave_version
-            node.teammate_fill = msg.teammate_fill
-            node.weapon_config = msg.weapon_config
-            node.level_threshold = msg.level_threshold
-            node.loot_count = msg.loot_count
-            node.token_key = msg.token_key
-            node.kami_code = msg.kami_code
             node.last_seen = datetime.now()
+            for attr, value in extra.items():
+                setattr(node, attr, value)
         if is_new:
             self.node_online.emit(name)
         self.node_updated.emit(name)
         self._recalc_online()
         self._schedule_stats()
+
+    def _handle_online(self, msg: UdpMessage, remote_ip: str) -> None:
+        self._upsert_node(msg, remote_ip)
+
+    def _handle_ext_online(self, msg: UdpMessage, remote_ip: str) -> None:
+        self._upsert_node(
+            msg, remote_ip,
+            group=msg.group,
+            cpu_percent=msg.cpu_percent,
+            mem_percent=msg.mem_percent,
+            slave_version=msg.slave_version,
+            teammate_fill=msg.teammate_fill,
+            weapon_config=msg.weapon_config,
+            level_threshold=msg.level_threshold,
+            loot_count=msg.loot_count,
+            token_key=msg.token_key,
+            kami_code=msg.kami_code,
+        )
 
     def _handle_offline(self, msg: UdpMessage, _remote_ip: str) -> None:
         name = msg.machine_name
