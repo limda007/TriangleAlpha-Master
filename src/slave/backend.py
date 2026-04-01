@@ -6,15 +6,14 @@ import base64
 import contextlib
 import json
 import os
-import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from common.protocol import HEARTBEAT_INTERVAL, GameState
+from slave.account_syncer import AccountSyncer
 from slave.auto_setup import check_rename, kill_remote_controls, setup_startup
 from slave.command_handler import CommandHandler
 from slave.heartbeat import HeartbeatService
@@ -22,19 +21,15 @@ from slave.ipc_receiver import LocalIpcReceiver
 from slave.log_reporter import LogReporter
 from slave.logging_utils import configure_slave_logging, get_logger
 from slave.models import RuntimeStatus
-from slave.process_manager import ProcessManager
-from slave.process_watcher import ProcessWatcher, is_process_alive, is_testdemo_running, kill_browsers
+from slave.process_watcher import ProcessWatcher
 from slave.state_store import SlaveStateStore
-from slave.status_aggregator import StatusAggregator, is_waiting_for_account, map_ipc_status
+from slave.status_aggregator import StatusAggregator, is_waiting_for_account
 
 logger = get_logger(__name__)
 
 
 class SlaveBackend(QThread):
     """在独立线程中运行所有 asyncio 后台服务。"""
-
-    _NEED_ACCOUNT_RETRY_SEC = 15.0
-    _NEED_ACCOUNT_STATUS_KEYWORDS = ("本地无可用账号", "向中控申请", "申请账号", "请求账号")
 
     heartbeat_sent = pyqtSignal(int, float, float)
     command_received = pyqtSignal(str)
@@ -57,6 +52,7 @@ class SlaveBackend(QThread):
         self.__script_started_at: float | None = None
         self._ipc = LocalIpcReceiver()
         self._status_agg = StatusAggregator(self._state_store, self._ipc)
+        self._account_syncer = AccountSyncer(self._state_store)
         self._process_watcher = ProcessWatcher(
             base_dir,
             self._ipc,
@@ -178,6 +174,22 @@ class SlaveBackend(QThread):
         self._status_agg.reset_ipc_state()
         self.account_updated.emit(count)
 
+    def _on_process_status(self, running: bool) -> None:
+        self._script_running = running
+        self.script_status.emit(running)
+
+    def _on_script_started(self) -> None:
+        self._script_started_at = time.time()
+
+    def _on_script_stopped(self) -> None:
+        self._script_started_at = None
+        try:
+            self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
+            self._state_store.clear_runtime_status()
+            logger.info("检测到 TestDemo 停止，已上报脚本停止状态")
+        except Exception:
+            logger.exception("发送脚本停止状态失败")
+
     def _on_group_changed(self, group: str) -> None:
         try:
             self._state_store.save_group(group)
@@ -200,135 +212,6 @@ class SlaveBackend(QThread):
             return
         count = sum(1 for line in content.splitlines() if line.strip())
         self.account_updated.emit(count)
-
-    async def _process_monitor(self) -> None:
-        """每 10s 检测 TestDemo.exe 是否存活，状态变化时上报 master。"""
-        was_running = False
-        pm = ProcessManager(str(self._base_dir))
-        testdemo_down_since: float | None = None  # TestDemo 挂掉的时间
-        testdemo_ever_alive = False  # TestDemo 是否曾经运行过
-        _RECOVERY_SEC = 60  # 给 TestDemo 60 秒恢复期
-        _MAX_RESTART = 3  # TestDemo 崩溃重启 Launcher 的最大次数
-        restart_count = 0  # 连续重启 Launcher 的次数
-        while self._running:
-            testdemo_alive = self._is_process_alive("testdemo")
-            launcher_alive = self._is_process_alive("trianglealpha.launcher")
-            running = testdemo_alive or launcher_alive
-            self._script_running = running
-            self.script_status.emit(running)
-
-            if testdemo_alive:
-                testdemo_ever_alive = True
-                restart_count = 0  # TestDemo 存活时重置重启计数
-
-            if running and not was_running:
-                self._script_started_at = time.time()
-                testdemo_down_since = None
-                logger.info("检测到 TestDemo 启动")
-
-            if was_running and not running:
-                self._script_started_at = None
-                testdemo_down_since = None
-                testdemo_ever_alive = False
-                restart_count = 0
-                try:
-                    self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
-                    self._state_store.clear_runtime_status()
-                    logger.info("检测到 TestDemo 停止，已上报脚本停止状态")
-                except Exception:
-                    logger.exception("发送脚本停止状态失败")
-
-            # TestDemo 挂了但 Launcher 还在 → 等恢复期后重启 Launcher
-            # 仅在 TestDemo 曾运行过后才触发，避免 Launcher 启动初期误判
-            if not testdemo_alive and launcher_alive and testdemo_ever_alive:
-                if testdemo_down_since is None:
-                    testdemo_down_since = time.time()
-                elif time.time() - testdemo_down_since >= _RECOVERY_SEC:
-                    if restart_count >= _MAX_RESTART:
-                        if restart_count == _MAX_RESTART:
-                            logger.error(
-                                "TestDemo 反复崩溃，已重启 %d 次仍无法恢复，停止重试",
-                                restart_count,
-                            )
-                            restart_count += 1  # 仅打一次日志
-                    else:
-                        restart_count += 1
-                        logger.warning(
-                            "TestDemo 已挂超过 %ds，重启 Launcher (%d/%d)",
-                            _RECOVERY_SEC, restart_count, _MAX_RESTART,
-                        )
-                        testdemo_down_since = None
-                        testdemo_ever_alive = False
-                        try:
-                            await pm.kill_by_name("TriangleAlpha.Launcher")
-                            await asyncio.sleep(2)
-                            await pm.start_launcher()
-                        except Exception:
-                            logger.exception("重启 Launcher 失败")
-            else:
-                testdemo_down_since = None
-
-            ipc_data, _ipc_age = self._ipc.snapshot()
-
-            was_running = running
-            # 关闭弹窗浏览器（游戏安全中心等无用页面）
-            # 仅在收到过 IPC 后才杀（游戏已就绪），避免干扰启动期认证
-            if ipc_data is not None:
-                self._kill_browsers()
-            await asyncio.sleep(10)
-
-    @staticmethod
-    def _is_process_alive(name: str) -> bool:
-        """检测指定进程是否存活（不区分大小写，忽略 .exe 后缀）"""
-        target = name.lower()
-        for proc in psutil.process_iter(["name"], ad_value=""):
-            try:
-                pname = proc.info.get("name", "")
-                if pname and pname.lower().removesuffix(".exe") == target:
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        return False
-
-    _BROWSER_NAMES = {"msedge", "chrome", "firefox", "iexplore", "browser"}
-    # 路径含这些关键词的浏览器进程属于游戏内嵌组件，不能杀
-    _GAME_PATH_KEYWORDS = ("steamapps", "delta force", "tencent", "wegame", "qbblink")
-
-    @staticmethod
-    def _kill_browsers() -> None:
-        """关闭浏览器进程（游戏安全中心等弹窗页面）"""
-        killed = 0
-        for proc in psutil.process_iter(["name", "exe"], ad_value=""):
-            try:
-                pname = proc.info.get("name", "")
-                if not pname:
-                    continue
-                base = pname.lower().removesuffix(".exe")
-                if base not in SlaveBackend._BROWSER_NAMES:
-                    continue
-                # 跳过游戏目录内的内嵌浏览器组件（如 df_launcher 的 browser.exe）
-                exe_path = (proc.info.get("exe") or "").lower()
-                if any(kw in exe_path for kw in SlaveBackend._GAME_PATH_KEYWORDS):
-                    continue
-                proc.kill()
-                killed += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        if killed:
-            logger.info("已关闭 %d 个浏览器进程", killed)
-
-    @staticmethod
-    def _is_testdemo_running() -> bool:
-        """检测脚本进程是否存活（Launcher 或 TestDemo 任一即可）"""
-        targets = ("testdemo", "trianglealpha.launcher")
-        for proc in psutil.process_iter(["name"], ad_value=""):
-            try:
-                name = proc.info.get("name", "")
-                if name and name.lower().removesuffix(".exe") in targets:
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        return False
 
     async def _status_reporter(self) -> None:
         """周期性发送 STATUS，保证 master 的状态链路持续闭环。"""
@@ -371,11 +254,6 @@ class SlaveBackend(QThread):
 
     def _load_runtime_snapshot(self) -> RuntimeStatus:
         return self._status_agg.load_runtime_snapshot()
-
-    @staticmethod
-    def _map_ipc_status(text: str) -> str:
-        """将 TestDemo IPC 上报的状态文字映射为 GameState 值。"""
-        return map_ipc_status(text)
 
     async def _status_writer(self, base_dir: Path, heartbeat: HeartbeatService, start_time: float) -> None:
         """定期写入 slave_status.json。"""
@@ -422,6 +300,7 @@ class SlaveBackend(QThread):
     def stop(self) -> None:
         """请求后台服务停止。"""
         self._running = False
+        self._process_watcher.stop()
         if self._loop and self._loop.is_running():
             with contextlib.suppress(RuntimeError):
                 self._loop.call_soon_threadsafe(self._request_shutdown)
@@ -432,55 +311,4 @@ class SlaveBackend(QThread):
                 task.cancel()
 
     def _build_account_sync_accounts(self, now: datetime | None = None) -> list[dict[str, object]]:
-        """构建待同步账号快照，并用运行时长校正当前活跃账号的登录时间。"""
-        accounts = self._state_store.load_all_game_accounts()
-        if not accounts:
-            return accounts
-        snapshot = self._load_runtime_snapshot()
-        self._align_active_account_login_at(accounts, snapshot, now=now)
-        return accounts
-
-    def _align_active_account_login_at(
-        self,
-        accounts: list[dict[str, object]],
-        snapshot: RuntimeStatus,
-        *,
-        now: datetime | None = None,
-    ) -> None:
-        current_account = snapshot.current_account.strip()
-        if not current_account:
-            return
-        login_at = self._derive_login_at(snapshot.elapsed, now=now)
-        if not login_at:
-            return
-        for account in accounts:
-            username = str(account.get("username", "")).strip()
-            if username != current_account:
-                continue
-            account["login_at"] = login_at
-            return
-
-    @staticmethod
-    def _derive_login_at(elapsed: object, *, now: datetime | None = None) -> str | None:
-        elapsed_seconds = SlaveBackend._parse_elapsed_seconds(elapsed)
-        if elapsed_seconds is None:
-            return None
-        current_time = now or datetime.now()
-        return (current_time - timedelta(seconds=elapsed_seconds)).strftime("%Y-%m-%d %H:%M:%S")
-
-    @staticmethod
-    def _parse_elapsed_seconds(raw: object) -> int | None:
-        if raw is None:
-            return None
-        text = str(raw).strip()
-        if not text:
-            return None
-        with contextlib.suppress(ValueError):
-            return max(0, int(text))
-        match = re.fullmatch(r"(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?", text)
-        if not match or not match.group(0):
-            return None
-        hours = int(match.group("hours") or "0")
-        minutes = int(match.group("minutes") or "0")
-        seconds = int(match.group("seconds") or "0")
-        return hours * 3600 + minutes * 60 + seconds
+        return self._account_syncer.build_sync_accounts(self._load_runtime_snapshot, now=now)

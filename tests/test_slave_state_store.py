@@ -319,38 +319,39 @@ class TestSlaveBackendStatusSnapshot:
         assert accounts[0]["login_at"] == "2026-03-24 14:04:00"
 
     def test_parse_elapsed_seconds_supports_human_readable_text(self):
-        assert SlaveBackend._parse_elapsed_seconds("4h56m") == 17760
+        from slave.account_syncer import parse_elapsed_seconds
+        assert parse_elapsed_seconds("4h56m") == 17760
 
 
 class TestMapIpcStatus:
     """IPC status_text → GameState 映射。"""
 
     def test_running_status(self):
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("运行中") == GameState.RUNNING
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("运行中") == GameState.RUNNING
 
     def test_completed_status(self):
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("已完成") == GameState.COMPLETED
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("已完成") == GameState.COMPLETED
 
     def test_intermediate_completion_stays_running(self):
         """'完成过关'等中间状态不应被误判为账号已完成"""
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("完成过关") == GameState.RUNNING
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("完成过关") == GameState.RUNNING
 
     def test_stopped_status(self):
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("脚本已停止") == GameState.SCRIPT_STOPPED
-        assert SlaveBackend._map_ipc_status("已退出") == GameState.SCRIPT_STOPPED
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("脚本已停止") == GameState.SCRIPT_STOPPED
+        assert map_ipc_status("已退出") == GameState.SCRIPT_STOPPED
 
     def test_empty_defaults_to_running(self):
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("") == GameState.RUNNING
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("") == GameState.RUNNING
 
     def test_unknown_text_defaults_to_running(self):
-        from slave.backend import SlaveBackend
-        assert SlaveBackend._map_ipc_status("过关中") == GameState.RUNNING
-        assert SlaveBackend._map_ipc_status("等待指令") == GameState.RUNNING
+        from slave.status_aggregator import map_ipc_status
+        assert map_ipc_status("过关中") == GameState.RUNNING
+        assert map_ipc_status("等待指令") == GameState.RUNNING
 
 
 class TestIpcPriorityInSnapshot:

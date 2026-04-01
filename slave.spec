@@ -92,6 +92,8 @@ a = Analysis(
         'slave.state_store',
         'slave.models',
         'slave.ipc_receiver',
+        'slave.process_watcher',
+        'slave.account_syncer',
         'slave.log_reporter',
         'slave.command_handler',
         'slave.heartbeat',
