@@ -61,6 +61,7 @@ def _build_macos_icon() -> str | None:
 
 httpx_datas, httpx_binaries, httpx_hiddenimports = collect_all('httpx')
 httpcore_datas, httpcore_binaries, httpcore_hiddenimports = collect_all('httpcore')
+pydantic_datas, pydantic_binaries, pydantic_hiddenimports = collect_all('pydantic')
 
 macos_icon = _build_macos_icon()
 exe_icon = 'src/master/app/resource/icon.ico' if sys.platform == 'win32' else None
@@ -68,11 +69,11 @@ exe_icon = 'src/master/app/resource/icon.ico' if sys.platform == 'win32' else No
 a = Analysis(
     ['src/master/main.py'],
     pathex=['src'],
-    binaries=[] + httpx_binaries + httpcore_binaries,
+    binaries=[] + httpx_binaries + httpcore_binaries + pydantic_binaries,
     datas=[
         ('src/master/app/resource', 'master/app/resource'),
         ('pyproject.toml', '.'),
-    ] + httpx_datas + httpcore_datas,
+    ] + httpx_datas + httpcore_datas + pydantic_datas,
     hiddenimports=[
         'PyQt6.sip',
         'qfluentwidgets',
@@ -107,7 +108,7 @@ a = Analysis(
         'httpx',
         'certifi',
         'master.app.core.platform_syncer',
-    ],
+    ] + pydantic_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

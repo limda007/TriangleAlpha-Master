@@ -57,6 +57,9 @@ def _build_macos_icon() -> str | None:
 
     return str(icon_path)
 
+from PyInstaller.utils.hooks import collect_all  # noqa: E402
+
+pydantic_datas, pydantic_binaries, pydantic_hiddenimports = collect_all('pydantic')
 
 macos_icon = _build_macos_icon()
 exe_icon = 'src/slave/resource/icon.ico' if sys.platform == 'win32' else None
@@ -64,11 +67,11 @@ exe_icon = 'src/slave/resource/icon.ico' if sys.platform == 'win32' else None
 a = Analysis(
     ['src/slave/main.py'],
     pathex=['src'],
-    binaries=[],
+    binaries=[] + pydantic_binaries,
     datas=[
         ('src/slave/resource', 'slave/resource'),
         ('pyproject.toml', '.'),
-    ],
+    ] + pydantic_datas,
     hiddenimports=[
         'psutil',
         'psutil._pswindows',
@@ -93,7 +96,7 @@ a = Analysis(
         'slave.command_handler',
         'slave.heartbeat',
         'slave.auto_setup',
-    ],
+    ] + pydantic_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
