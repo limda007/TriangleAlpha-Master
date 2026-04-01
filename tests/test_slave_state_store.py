@@ -501,7 +501,6 @@ class TestPersistedElapsed:
     """上机时间跨重启持久化测试。"""
 
     def test_get_active_login_at_returns_login_time(self, tmp_path: Path):
-        """无 LastLoginTime 时回退到 account_login_state 的 last_login_at"""
         store = SlaveStateStore(tmp_path)
         (tmp_path / "accounts.json").write_text(
             json.dumps([{"Username": "user1", "IsActive": True}]),
@@ -512,37 +511,6 @@ class TestPersistedElapsed:
             encoding="utf-8",
         )
         assert store.get_active_login_at() == "2026-03-24 10:00:00"
-
-    def test_get_active_login_at_prefers_last_login_time(self, tmp_path: Path):
-        """优先使用 TestDemo 的 LastLoginTime（实际游戏登录时刻）"""
-        store = SlaveStateStore(tmp_path)
-        (tmp_path / "accounts.json").write_text(
-            json.dumps([{
-                "Username": "user1",
-                "IsActive": True,
-                "LastLoginTime": "2026-04-01T18:49:51.6547865+08:00",
-            }]),
-            encoding="utf-8",
-        )
-        (tmp_path / "account_login_state.json").write_text(
-            json.dumps({"user1": {"last_login_at": "2026-04-01 15:02:47", "was_active": True}}),
-            encoding="utf-8",
-        )
-        # 应该用 LastLoginTime (18:49:51) 而非 last_login_at (15:02:47)
-        assert store.get_active_login_at() == "2026-04-01 18:49:51"
-
-    def test_get_active_login_at_iso_without_timezone(self, tmp_path: Path):
-        """LastLoginTime 无时区也能解析"""
-        store = SlaveStateStore(tmp_path)
-        (tmp_path / "accounts.json").write_text(
-            json.dumps([{
-                "Username": "user1",
-                "IsActive": True,
-                "LastLoginTime": "2026-04-01T18:49:51",
-            }]),
-            encoding="utf-8",
-        )
-        assert store.get_active_login_at() == "2026-04-01 18:49:51"
 
     def test_get_active_login_at_returns_empty_when_no_active(self, tmp_path: Path):
         store = SlaveStateStore(tmp_path)
