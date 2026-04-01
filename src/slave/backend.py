@@ -173,15 +173,22 @@ class SlaveBackend(QThread):
         was_running = False
         pm = ProcessManager(str(self._base_dir))
         testdemo_down_since: float | None = None  # TestDemo 挂掉的时间
+        testdemo_ever_alive = False  # TestDemo 是否曾经运行过
         _RECOVERY_SEC = 60  # 给 TestDemo 60 秒恢复期
+        _MAX_RESTART = 3  # TestDemo 崩溃重启 Launcher 的最大次数
         _IPC_STALE_SEC = 60  # TestDemo IPC 静默超过此时间则重启 Launcher
         ipc_restart_cooldown: float = 0  # 上次 IPC 触发重启的时间戳
+        restart_count = 0  # 连续重启 Launcher 的次数
         while self._running:
             testdemo_alive = self._is_process_alive("testdemo")
             launcher_alive = self._is_process_alive("trianglealpha.launcher")
             running = testdemo_alive or launcher_alive
             self._script_running = running
             self.script_status.emit(running)
+
+            if testdemo_alive:
+                testdemo_ever_alive = True
+                restart_count = 0  # TestDemo 存活时重置重启计数
 
             if running and not was_running:
                 self._script_started_at = time.time()
@@ -191,6 +198,8 @@ class SlaveBackend(QThread):
             if was_running and not running:
                 self._script_started_at = None
                 testdemo_down_since = None
+                testdemo_ever_alive = False
+                restart_count = 0
                 try:
                     self._heartbeat.send_status(GameState.SCRIPT_STOPPED)
                     self._state_store.clear_runtime_status()
@@ -199,18 +208,32 @@ class SlaveBackend(QThread):
                     logger.exception("发送脚本停止状态失败")
 
             # TestDemo 挂了但 Launcher 还在 → 等恢复期后重启 Launcher
-            if not testdemo_alive and launcher_alive:
+            # 仅在 TestDemo 曾运行过后才触发，避免 Launcher 启动初期误判
+            if not testdemo_alive and launcher_alive and testdemo_ever_alive:
                 if testdemo_down_since is None:
                     testdemo_down_since = time.time()
                 elif time.time() - testdemo_down_since >= _RECOVERY_SEC:
-                    logger.warning("TestDemo 已挂超过 %ds，重启 Launcher", _RECOVERY_SEC)
-                    testdemo_down_since = None
-                    try:
-                        await pm.kill_by_name("TriangleAlpha.Launcher")
-                        await asyncio.sleep(2)
-                        await pm.start_launcher()
-                    except Exception:
-                        logger.exception("重启 Launcher 失败")
+                    if restart_count >= _MAX_RESTART:
+                        if restart_count == _MAX_RESTART:
+                            logger.error(
+                                "TestDemo 反复崩溃，已重启 %d 次仍无法恢复，停止重试",
+                                restart_count,
+                            )
+                            restart_count += 1  # 仅打一次日志
+                    else:
+                        restart_count += 1
+                        logger.warning(
+                            "TestDemo 已挂超过 %ds，重启 Launcher (%d/%d)",
+                            _RECOVERY_SEC, restart_count, _MAX_RESTART,
+                        )
+                        testdemo_down_since = None
+                        testdemo_ever_alive = False
+                        try:
+                            await pm.kill_by_name("TriangleAlpha.Launcher")
+                            await asyncio.sleep(2)
+                            await pm.start_launcher()
+                        except Exception:
+                            logger.exception("重启 Launcher 失败")
             else:
                 testdemo_down_since = None
 
