@@ -95,6 +95,8 @@ class UdpMessage:
     sync_payload: str = ""  # ACCOUNT_SYNC: base64 编码的 JSON 账号数组
     token_key: str = ""     # EXT_ONLINE: slave 端 token.txt 内容
     kami_code: str = ""     # EXT_ONLINE: slave 端 kamis.txt 当前值
+    vram_used_mb: int = 0   # GPU 显存已用 (MB)
+    vram_total_mb: int = 0  # GPU 显存总量 (MB)
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -132,6 +134,8 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 loot_count=parts[10] if len(parts) >= 11 else "",
                 token_key=parts[11] if len(parts) >= 12 else "",
                 kami_code=parts[12] if len(parts) >= 13 else "",
+                vram_used_mb=int(parts[13]) if len(parts) >= 14 and parts[13].isdigit() else 0,
+                vram_total_mb=int(parts[14]) if len(parts) >= 15 and parts[14].isdigit() else 0,
             )
         case "ACCOUNT_SYNC" if len(parts) >= 3 and parts[2]:
             return UdpMessage(
@@ -157,10 +161,12 @@ def build_udp_ext_online(
     version: str, group: str, teammate_fill: str = "",
     weapon_config: str = "", level_threshold: str = "",
     loot_count: str = "", token_key: str = "", kami_code: str = "",
+    vram_used_mb: int = 0, vram_total_mb: int = 0,
 ) -> str:
     return (
         f"EXT_ONLINE|{machine_name}|{user_name}|{cpu:.1f}|{mem:.1f}"
         f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}|{token_key}|{kami_code}"
+        f"|{vram_used_mb}|{vram_total_mb}"
     )
 
 

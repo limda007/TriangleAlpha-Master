@@ -2,6 +2,7 @@ from common.protocol import (
     TcpCommand,
     UdpMessageType,
     build_tcp_command,
+    build_udp_ext_online,
     build_udp_online,
     build_udp_status,
     parse_udp_message,
@@ -49,6 +50,18 @@ class TestParseUdp:
         assert msg is not None
         assert msg.token_key == "TOKEN123"
         assert msg.kami_code == "KAMI456"
+
+    def test_parse_ext_online_with_vram(self):
+        msg = parse_udp_message("EXT_ONLINE|VM-01|Admin|45.2|60.1|1.0.0|A组|||||TOKEN123|KAMI456|4200|6144")
+        assert msg is not None
+        assert msg.vram_used_mb == 4200
+        assert msg.vram_total_mb == 6144
+
+    def test_parse_ext_online_without_vram_backward_compat(self):
+        msg = parse_udp_message("EXT_ONLINE|VM-01|Admin|45.2|60.1|1.0.0|A组|||||TOKEN123|KAMI456")
+        assert msg is not None
+        assert msg.vram_used_mb == 0
+        assert msg.vram_total_mb == 0
 
     def test_parse_unknown_returns_none(self):
         assert parse_udp_message("GARBAGE|data") is None
@@ -108,6 +121,20 @@ class TestParseUdp:
 class TestBuildUdp:
     def test_build_online(self):
         assert build_udp_online("VM-01", "Admin") == "ONLINE|VM-01|Admin"
+
+    def test_build_ext_online_with_vram(self):
+        result = build_udp_ext_online("VM-01", "Admin", 45.2, 60.1, "1.0.0", "A组",
+                                       vram_used_mb=4200, vram_total_mb=6144)
+        assert "|4200|6144" in result
+        # Round-trip: parse it back
+        msg = parse_udp_message(result)
+        assert msg is not None
+        assert msg.vram_used_mb == 4200
+        assert msg.vram_total_mb == 6144
+
+    def test_build_ext_online_default_vram(self):
+        result = build_udp_ext_online("VM-01", "Admin", 0.0, 0.0, "1.0.0", "默认")
+        assert result.endswith("|0|0")
 
     def test_build_status(self):
         result_default = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级")

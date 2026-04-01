@@ -185,6 +185,8 @@ class NodeManager(QObject):
             loot_count=msg.loot_count,
             token_key=msg.token_key,
             kami_code=msg.kami_code,
+            vram_used_mb=msg.vram_used_mb,
+            vram_total_mb=msg.vram_total_mb,
         )
 
     def _handle_offline(self, msg: UdpMessage, _remote_ip: str) -> None:

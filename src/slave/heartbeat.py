@@ -20,6 +20,7 @@ from common.protocol import (
     build_udp_offline,
     build_udp_status,
 )
+from slave.gpu_monitor import get_vram_info
 from slave.logging_utils import get_logger
 
 SLAVE_VERSION = read_project_version()
@@ -106,6 +107,7 @@ class HeartbeatService:
                         loot_count = self._read_config("舔包次数.txt")
                         token_key = self._read_config("token.txt")
                         kami_code = self._read_kami_code()
+                        vram_used, vram_total = get_vram_info()
                         msg = build_udp_ext_online(
                             self._machine_name,
                             self._user_name,
@@ -119,6 +121,8 @@ class HeartbeatService:
                             loot_count,
                             token_key,
                             kami_code,
+                            vram_used_mb=vram_used,
+                            vram_total_mb=vram_total,
                         )
                         data = msg.encode("utf-8")
                         target = (self._master_ip, self._port) if self._master_ip else ("255.255.255.255", self._port)

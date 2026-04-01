@@ -97,6 +97,7 @@ a = Analysis(
         'slave.log_reporter',
         'slave.command_handler',
         'slave.heartbeat',
+        'slave.gpu_monitor',
         'slave.auto_setup',
     ] + pydantic_hiddenimports,
     hookspath=[],

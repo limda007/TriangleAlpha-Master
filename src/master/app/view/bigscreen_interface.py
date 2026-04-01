@@ -118,7 +118,7 @@ class _BalanceWorker(QThread):
 
 _NODE_HEADERS = [
     "", "机器名", "IP地址", "卡密", "账号", "等级", "金币",
-    "运行时间", "运行状态", "CPU%", "内存%",
+    "运行时间", "运行状态", "CPU%", "内存%", "显存",
 ]
 
 # 状态色
@@ -1057,6 +1057,7 @@ class BigScreenInterface(ScrollArea):
             node.status_text or node.game_state or node.status,
             f"{node.cpu_percent:.0f}%",
             f"{node.mem_percent:.0f}%",
+            self._format_vram(node.vram_used_mb, node.vram_total_mb),
         ]
 
         # 状态列：彩色圆点图标
@@ -1975,6 +1976,15 @@ class BigScreenInterface(ScrollArea):
         if hours:
             return f"{hours}h{mins:02d}m"
         return f"{mins}m"
+
+    @staticmethod
+    def _format_vram(used_mb: int, total_mb: int) -> str:
+        """Format VRAM as 'used/totalG' (e.g., '4.2/6G')."""
+        if total_mb <= 0:
+            return "--"
+        used_gb = used_mb / 1024
+        total_gb = total_mb / 1024
+        return f"{used_gb:.1f}/{total_gb:.0f}G"
 
     @staticmethod
     def _teammate_fill_display(val: str) -> str:
