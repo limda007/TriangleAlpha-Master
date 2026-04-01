@@ -101,6 +101,8 @@ a = Analysis(
         'common.models',
         'common.app_version',
         'common_app_version',
+        'pydantic',
+        'pydantic.fields',
         'psutil',
         'httpx',
         'certifi',
