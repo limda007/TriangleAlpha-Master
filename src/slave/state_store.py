@@ -130,6 +130,22 @@ class SlaveStateStore:
             self._save_account_login_state(login_state)
         return result
 
+    def get_active_login_at(self) -> str:
+        """获取当前活跃账号的 last_login_at 时间戳。"""
+        accounts = self._read_json(self._base_dir / "accounts.json")
+        if not isinstance(accounts, list):
+            return ""
+        active_username = ""
+        for acc in accounts:
+            if isinstance(acc, dict) and acc.get("IsActive"):
+                active_username = self._as_text(acc.get("Username"), "")
+                break
+        if not active_username:
+            return ""
+        login_state = self._load_account_login_state()
+        state = login_state.get(active_username, {})
+        return self._as_text(state.get("last_login_at"), "")
+
     def clear_runtime_status(self) -> None:
         try:
             self.runtime_status_path.unlink()

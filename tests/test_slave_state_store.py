@@ -495,3 +495,78 @@ class TestNeedAccountRetry:
         assert not backend._retry_need_account_if_needed(running, heartbeat, now_monotonic=101.0)
         assert backend._retry_need_account_if_needed(waiting, heartbeat, now_monotonic=102.0)
         assert heartbeat.send_need_account.call_count == 2
+
+
+class TestPersistedElapsed:
+    """上机时间跨重启持久化测试。"""
+
+    def test_get_active_login_at_returns_login_time(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "user1", "IsActive": True}]),
+            encoding="utf-8",
+        )
+        (tmp_path / "account_login_state.json").write_text(
+            json.dumps({"user1": {"last_login_at": "2026-03-24 10:00:00", "was_active": True}}),
+            encoding="utf-8",
+        )
+        assert store.get_active_login_at() == "2026-03-24 10:00:00"
+
+    def test_get_active_login_at_returns_empty_when_no_active(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "user1", "IsActive": False}]),
+            encoding="utf-8",
+        )
+        assert store.get_active_login_at() == ""
+
+    def test_get_active_login_at_returns_empty_when_no_files(self, tmp_path: Path):
+        store = SlaveStateStore(tmp_path)
+        assert store.get_active_login_at() == ""
+
+    def test_max_elapsed_picks_larger(self):
+        from slave.status_aggregator import _max_elapsed
+        assert _max_elapsed("100", "7200") == "7200"
+        assert _max_elapsed("7200", "100") == "7200"
+        assert _max_elapsed("0", "0") == ""
+        assert _max_elapsed("", "500") == "500"
+        assert _max_elapsed("500", "") == "500"
+
+    def test_elapsed_survives_process_restart(self, tmp_path: Path):
+        """模拟 TestDemo 重启后 IPC elapsed 归零，但持久化 elapsed 保持连续。"""
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 10
+
+        login_time = datetime(2026, 3, 24, 10, 0, 0)
+        (tmp_path / "accounts.json").write_text(
+            json.dumps([{"Username": "user1", "IsActive": True}]),
+            encoding="utf-8",
+        )
+        (tmp_path / "account_login_state.json").write_text(
+            json.dumps({"user1": {
+                "last_login_at": login_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "was_active": True,
+            }}),
+            encoding="utf-8",
+        )
+
+        # TestDemo 刚重启，IPC 只上报了很小的 elapsed
+        backend._ipc._on_message(IpcData(
+            level="10", jinbi="500", status_text="运行中", elapsed="30",
+        ))
+
+        snapshot = backend._load_runtime_snapshot()
+        elapsed_sec = int(snapshot.elapsed)
+        # 应该远大于 IPC 的 30 秒（实际应 ≈ 当前时间 - 10:00:00）
+        assert elapsed_sec > 3600
+
+    def test_elapsed_uses_script_started_at_when_no_login_state(self, tmp_path: Path):
+        """无 account_login_state.json 时回退到 _script_started_at。"""
+        backend = SlaveBackend(tmp_path, None)
+        backend._script_started_at = time.time() - 120
+
+        backend._ipc.clear_snapshot()
+
+        snapshot = backend._load_runtime_snapshot()
+        elapsed_sec = int(snapshot.elapsed)
+        assert 115 <= elapsed_sec <= 130

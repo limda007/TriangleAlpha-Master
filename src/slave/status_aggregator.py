@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 from common.protocol import IPC_TIMEOUT, GameState
 from slave.ipc_receiver import LocalIpcReceiver
@@ -57,11 +58,27 @@ class StatusAggregator:
         self._last_need_account_request_at = 0.0
         self._ipc.clear_snapshot()
 
+    def _compute_persisted_elapsed(self) -> str:
+        """从持久化的 last_login_at 推算上机时间（秒），跨重启不丢失。"""
+        login_at_str = self._state_store.get_active_login_at()
+        if not login_at_str:
+            return ""
+        try:
+            login_at = datetime.strptime(login_at_str, "%Y-%m-%d %H:%M:%S")
+            elapsed_sec = max(0, int((datetime.now() - login_at).total_seconds()))
+            return str(elapsed_sec)
+        except ValueError:
+            return ""
+
     def load_runtime_snapshot(self) -> RuntimeStatus:
         """三级数据聚合：IPC 优先 → IPC 缓存沿用 → 文件兜底。"""
-        default_elapsed = "0"
-        if self._script_started_at is not None:
+        persisted_elapsed = self._compute_persisted_elapsed()
+        if persisted_elapsed:
+            default_elapsed = persisted_elapsed
+        elif self._script_started_at is not None:
             default_elapsed = str(max(0, int(time.time() - self._script_started_at)))
+        else:
+            default_elapsed = "0"
 
         active_acc = self._state_store.load_active_account(default_elapsed=default_elapsed)
         active_name = active_acc.current_account if active_acc else ""
@@ -79,7 +96,7 @@ class StatusAggregator:
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
                 current_account=active_name,
-                elapsed=ipc_data.elapsed or default_elapsed,
+                elapsed=_max_elapsed(ipc_data.elapsed, default_elapsed) or default_elapsed,
                 status_text=raw_status,
             )
 
@@ -92,7 +109,7 @@ class StatusAggregator:
                 level=int(level_raw) if level_raw.isdigit() else 0,
                 jin_bi=self._last_ipc_jin_bi,
                 current_account=active_name,
-                elapsed=ipc_data.elapsed or default_elapsed,
+                elapsed=_max_elapsed(ipc_data.elapsed, default_elapsed) or default_elapsed,
                 status_text=raw_status,
             )
 
@@ -151,6 +168,14 @@ def map_ipc_status(text: str) -> str:
     if "停" in text or "退出" in text:
         return GameState.SCRIPT_STOPPED
     return GameState.RUNNING
+
+
+def _max_elapsed(a: str, b: str) -> str:
+    """取两个 elapsed 秒数字符串中的较大值。"""
+    a_val = int(a) if a.isdigit() else 0
+    b_val = int(b) if b.isdigit() else 0
+    best = max(a_val, b_val)
+    return str(best) if best > 0 else ""
 
 
 def is_waiting_for_account(snapshot: RuntimeStatus) -> bool:
