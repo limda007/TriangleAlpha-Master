@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import time
 
 from slave.logging_utils import get_logger
@@ -22,11 +24,16 @@ async def get_vram_info() -> tuple[int, int]:
 
     used, total = 0, 0
     try:
+        # Windows 上必须 CREATE_NO_WINDOW 防止 conhost 弹窗闪烁
+        kwargs: dict = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         proc = await asyncio.create_subprocess_exec(
             "nvidia-smi", "--query-gpu=memory.used,memory.total",
             "--format=csv,noheader,nounits",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            **kwargs,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         if proc.returncode == 0 and stdout:
@@ -36,7 +43,7 @@ async def get_vram_info() -> tuple[int, int]:
                 used, total = int(parts[0]), int(parts[1])
     except FileNotFoundError:
         pass
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.debug("nvidia-smi 超时")
     except (ValueError, IndexError, OSError) as exc:
         logger.debug("nvidia-smi 解析失败: %s", exc)
