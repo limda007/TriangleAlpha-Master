@@ -45,8 +45,8 @@ async def get_vram_info() -> tuple[int, int]:
         pass
     except TimeoutError:
         logger.debug("nvidia-smi 超时")
-    except (ValueError, IndexError, OSError) as exc:
-        logger.debug("nvidia-smi 解析失败: %s", exc)
+    except Exception as exc:
+        logger.debug("nvidia-smi 不可用: %s", exc)
 
     _cache_ts = now
     _cache_val = (used, total)
