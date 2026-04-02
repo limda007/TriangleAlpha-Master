@@ -152,7 +152,7 @@ class NodeManager(QObject):
         """创建或更新节点，发射信号。extra 为 EXT_ONLINE 的扩展字段。"""
         name = msg.machine_name
         is_new = name not in self.nodes
-        was_offline = not is_new and self.nodes[name].status == "离线"
+        was_offline = not is_new and self.nodes[name].status in ("离线", "断连")
         if is_new:
             self.nodes[name] = NodeInfo(
                 machine_name=name, ip=remote_ip, user_name=msg.user_name, **extra,

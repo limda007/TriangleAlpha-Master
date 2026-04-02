@@ -54,6 +54,13 @@ def _setup_logging() -> None:
     pkg_root.addHandler(console)
     pkg_root.addHandler(file_handler)
 
+    # common.protocol 等共享模块的 logger
+    common_root = logging.getLogger("common")
+    common_root.setLevel(logging.INFO)
+    common_root.propagate = False
+    common_root.addHandler(console)
+    common_root.addHandler(file_handler)
+
 
 def _write_crash_log(exc_type, exc_value, exc_tb) -> None:
     """将未捕获异常追加写入 crash.log，同时保留默认 stderr 输出。"""

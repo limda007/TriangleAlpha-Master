@@ -120,3 +120,17 @@ class TestNodeManager:
         self.nm.handle_udp_message(msg, "10.1.3.51")
         self.nm.handle_udp_message(msg, "10.1.3.51")  # 第二次心跳
         assert emitted == ["VM-01"]  # 只触发一次
+
+    def test_node_online_emits_on_disconnected_to_online(self):
+        """断连→在线 应重新触发 node_online 信号。"""
+        emitted: list[str] = []
+        self.nm.node_online.connect(lambda name: emitted.append(name))
+        msg = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="A")
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        assert emitted == ["VM-01"]
+        # 手动标记断连（模拟超时）
+        self.nm.nodes["VM-01"].status = "断连"
+        # 重新上线 → 应再次发射 node_online
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        assert emitted == ["VM-01", "VM-01"]
+        assert self.nm.nodes["VM-01"].status == "在线"
