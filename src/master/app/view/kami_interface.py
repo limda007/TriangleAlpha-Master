@@ -1,6 +1,7 @@
 """卡密管理页面 — 导入/刷新/分配/删除"""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Protocol, cast
 
@@ -48,6 +49,8 @@ _STATUS_COLORS: dict[str, tuple[str, str]] = {
     "未使用": ("#f5f5f5", "#757575"),
     "未知": ("#fff3e0", "#e65100"),
 }
+
+logger = logging.getLogger(__name__)
 
 
 class _TcpSender(Protocol):
@@ -402,6 +405,7 @@ class KamiInterface(ScrollArea):
         """弹出节点选择对话框"""
         nodes = self._getOnlineNodes()
         if not nodes:
+            logger.warning("[卡密分配] 当前没有在线节点")
             InfoBar.warning(
                 "提示", "当前没有在线节点",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
@@ -414,6 +418,7 @@ class KamiInterface(ScrollArea):
         if not dlg.exec():
             return
         node_name = combo.currentText()
+        logger.info("[卡密分配] 尝试绑定 kami_id=%d → %s", kami_id, node_name)
         if self._kami_db.bind_node(kami_id, node_name):
             self._pushKamiToNode(kami_id, node_name)
             InfoBar.success(
@@ -421,6 +426,7 @@ class KamiInterface(ScrollArea):
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
         else:
+            logger.error("[卡密分配] 绑定失败: kami_id=%d, node=%s", kami_id, node_name)
             InfoBar.warning(
                 "分配失败", "节点已有卡密绑定，或该卡密不可分配/设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
@@ -467,14 +473,18 @@ class KamiInterface(ScrollArea):
 
     def _pushKamiToNode(self, kami_id: int, node_name: str) -> None:
         if self._tcp is None:
+            logger.error("[卡密下发] tcp 未初始化，无法下发 kami_id=%d → %s", kami_id, node_name)
             return
         nodes = getattr(self._node_manager, "nodes", {})
         node = nodes.get(node_name) if isinstance(nodes, dict) else None
         if node is None or not getattr(node, "ip", ""):
+            logger.error("[卡密下发] 节点不存在或无IP: %s", node_name)
             return
         kami = next((item for item in self._kami_db.get_all_kamis() if item.id == kami_id), None)
         if kami is None:
+            logger.error("[卡密下发] 卡密不存在: kami_id=%d", kami_id)
             return
+        logger.info("[卡密下发] TCP发送 %s(%s) ← %s", node_name, node.ip, kami.kami_code[:8])
         self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
 
     def _getSelectedKamiIds(self) -> list[int]:

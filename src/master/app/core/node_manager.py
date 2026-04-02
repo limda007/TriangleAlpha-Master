@@ -152,6 +152,7 @@ class NodeManager(QObject):
         """创建或更新节点，发射信号。extra 为 EXT_ONLINE 的扩展字段。"""
         name = msg.machine_name
         is_new = name not in self.nodes
+        was_offline = not is_new and self.nodes[name].status == "离线"
         if is_new:
             self.nodes[name] = NodeInfo(
                 machine_name=name, ip=remote_ip, user_name=msg.user_name, **extra,
@@ -164,7 +165,7 @@ class NodeManager(QObject):
             node.last_seen = datetime.now()
             for attr, value in extra.items():
                 setattr(node, attr, value)
-        if is_new:
+        if is_new or was_offline:
             self.node_online.emit(name)
         self.node_updated.emit(name)
         self._recalc_online()

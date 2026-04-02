@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from common.models import KamiInfo, KamiStatus
+
+logger = logging.getLogger(__name__)
 
 _KAMI_SCHEMA = """\
 CREATE TABLE IF NOT EXISTS kamis (
@@ -212,6 +215,12 @@ class KamiDB(QObject):
             tuple(_ALLOCATABLE_STATUSES),
         )
         row = cur.fetchone()
+        if row:
+            logger.info("[卡密查找] 找到可用卡密: id=%d, code=%s…, 剩余=%d天, 设备=%d/%d",
+                        row["id"], row["kami_code"][:8], row["remaining_days"],
+                        row["device_used"], row["device_total"])
+        else:
+            logger.warning("[卡密查找] 没有可用卡密（状态=%s, 且仍有额度）", list(_ALLOCATABLE_STATUSES))
         return self._row_to_info(row) if row else None
 
     # ── 绑定 / 解绑 ──────────────────────────────────────
@@ -223,17 +232,22 @@ class KamiDB(QObject):
             (node_name,),
         ).fetchone()
         if existing:
-            return int(existing["kami_id"]) == kami_id
+            same = int(existing["kami_id"]) == kami_id
+            logger.info("[卡密绑定] %s 已绑定 kami_id=%d (相同=%s)", node_name, int(existing["kami_id"]), same)
+            return same
 
         kami_row = self._conn.execute(
             "SELECT status, device_used, device_total FROM kamis WHERE id=? LIMIT 1",
             (kami_id,),
         ).fetchone()
         if kami_row is None:
+            logger.error("[卡密绑定] kami_id=%d 不存在", kami_id)
             return False
         if not _is_allocatable_status(str(kami_row["status"])):
+            logger.warning("[卡密绑定] kami_id=%d 状态不可分配: %s", kami_id, kami_row["status"])
             return False
         if int(kami_row["device_total"]) <= int(kami_row["device_used"]):
+            logger.warning("[卡密绑定] kami_id=%d 设备额度已满: %d/%d", kami_id, int(kami_row["device_used"]), int(kami_row["device_total"]))
             return False
 
         try:

@@ -95,3 +95,28 @@ class TestNodeManager:
         node = self.nm.nodes["VM-01"]
         assert node.token_key == "TOKEN123"
         assert node.kami_code == "KAMI456"
+
+    def test_node_online_emits_on_offline_to_online(self):
+        """离线→在线 应重新触发 node_online 信号。"""
+        emitted: list[str] = []
+        self.nm.node_online.connect(lambda name: emitted.append(name))
+        msg = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="A")
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        assert emitted == ["VM-01"]
+        # 标记离线
+        msg_off = UdpMessage(type=UdpMessageType.OFFLINE, machine_name="VM-01")
+        self.nm.handle_udp_message(msg_off, "10.1.3.51")
+        assert self.nm.nodes["VM-01"].status == "离线"
+        # 重新上线 → 应再次发射 node_online
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        assert emitted == ["VM-01", "VM-01"]
+        assert self.nm.nodes["VM-01"].status == "在线"
+
+    def test_node_online_not_emitted_for_already_online(self):
+        """已在线节点收到心跳时，不应重复发射 node_online。"""
+        emitted: list[str] = []
+        self.nm.node_online.connect(lambda name: emitted.append(name))
+        msg = UdpMessage(type=UdpMessageType.ONLINE, machine_name="VM-01", user_name="A")
+        self.nm.handle_udp_message(msg, "10.1.3.51")
+        self.nm.handle_udp_message(msg, "10.1.3.51")  # 第二次心跳
+        assert emitted == ["VM-01"]  # 只触发一次

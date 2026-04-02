@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import datetime
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger(__name__)
 from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
@@ -284,6 +287,7 @@ class BigScreenInterface(ScrollArea):
 
         # ═══ 信号连接 ═══
         self._nm.node_online.connect(self._scheduleRefreshTable)
+        self._nm.node_online.connect(self._autoPushKamiForNode)
         self._nm.node_updated.connect(self._scheduleRefreshTable)
         self._nm.node_offline.connect(self._scheduleRefreshTable)
         self._nm.node_offline.connect(self._onNodeOffline)
@@ -1644,12 +1648,27 @@ class BigScreenInterface(ScrollArea):
             parent=self, position=InfoBarPosition.TOP, duration=2000,
         )
 
-    def _assignNodeKami(self, machine_name: str, ip: str) -> None:
-        """手动为节点分配卡密"""
+    def _autoPushKamiForNode(self, machine_name: str) -> None:
+        """节点上线/重连时，自动重推已绑定的卡密。"""
         if not self._kami_db:
             return
         existing = self._kami_db.get_kami_for_node(machine_name)
+        if not existing:
+            return
+        node = self._nm.nodes.get(machine_name)
+        if node is None or not node.ip:
+            return
+        self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, existing.kami_code)
+        logger.info("节点上线自动重推卡密: %s ← %s…", machine_name, existing.kami_code[:8])
+
+    def _assignNodeKami(self, machine_name: str, ip: str) -> None:
+        """手动为节点分配卡密"""
+        if not self._kami_db:
+            logger.warning("[卡密分配] kami_db 未初始化，跳过 %s", machine_name)
+            return
+        existing = self._kami_db.get_kami_for_node(machine_name)
         if existing:
+            logger.info("[卡密重发] %s(%s) ← %s", machine_name, ip, existing.kami_code[:8])
             self._tcp.send(ip, TcpCommand.PUSH_KAMI, existing.kami_code)
             InfoBar.success(
                 "已重发", f"{machine_name} ← {existing.kami_code[:8]}…",
@@ -1658,18 +1677,22 @@ class BigScreenInterface(ScrollArea):
             return
         kami = self._kami_db.find_available_kami()
         if kami is None:
+            logger.warning("[卡密分配] 无可用卡密，无法分配给 %s", machine_name)
             InfoBar.warning(
                 "无可用卡密", "没有可分配的有效卡密",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
             )
             return
+        logger.info("[卡密分配] 尝试绑定 kami_id=%d → %s", kami.id, machine_name)
         if self._kami_db.bind_node(kami.id, machine_name):
+            logger.info("[卡密分配] 绑定成功，下发 %s(%s) ← %s", machine_name, ip, kami.kami_code[:8])
             self._tcp.send(ip, TcpCommand.PUSH_KAMI, kami.kami_code)
             InfoBar.success(
                 "已分配", f"{machine_name} ← {kami.kami_code[:8]}…",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
         else:
+            logger.error("[卡密分配] 绑定失败: kami_id=%d, node=%s", kami.id, machine_name)
             InfoBar.warning(
                 "分配失败", "节点已有卡密绑定，或该卡密不可分配/设备额度已满",
                 parent=self, position=InfoBarPosition.TOP, duration=3000,
@@ -1678,6 +1701,7 @@ class BigScreenInterface(ScrollArea):
     def _assignKamiToNodes(self, nodes: list[NodeInfo]) -> None:
         """按节点列表分配或重发卡密。"""
         if not self._kami_db or not nodes:
+            logger.warning("[卡密批量] kami_db 未初始化或节点列表为空")
             return
         if len(nodes) == 1:
             node = nodes[0]
@@ -1694,13 +1718,16 @@ class BigScreenInterface(ScrollArea):
                 continue
             kami = self._kami_db.find_available_kami()
             if kami is None:
+                logger.warning("[卡密批量] 无可用卡密，跳过 %s", node.machine_name)
                 failed += 1
                 continue
             if self._kami_db.bind_node(kami.id, node.machine_name):
                 self._tcp.send(node.ip, TcpCommand.PUSH_KAMI, kami.kami_code)
                 assigned += 1
             else:
+                logger.error("[卡密批量] 绑定失败: kami_id=%d, node=%s", kami.id, node.machine_name)
                 failed += 1
+        logger.info("[卡密批量] 共 %d 节点: 新分配 %d, 重发 %d, 失败 %d", len(nodes), assigned, resent, failed)
         InfoBar.success(
             "卡密处理完成",
             f"选中 {len(nodes)} 节点: 新分配 {assigned} 个, 重发 {resent} 个, 失败 {failed} 个",

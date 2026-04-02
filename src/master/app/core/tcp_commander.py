@@ -1,13 +1,16 @@
-"""TCP 指令发送器：通过线程池并发发送 TCP 命令到被控端"""
+"""​TCP 指令发送器：通过线程池并发发送 TCP 命令到被控端"""
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import socket
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 from common.protocol import TCP_CMD_PORT, TCP_SEND_TIMEOUT, TcpCommand, build_tcp_command
+
+logger = logging.getLogger(__name__)
 
 
 class _TcpSendTask(QRunnable):
@@ -26,11 +29,14 @@ class _TcpSendTask(QRunnable):
             sock.settimeout(TCP_SEND_TIMEOUT)
             sock.connect((self._ip, TCP_CMD_PORT))
             sock.sendall((self._command_str + "\n").encode("utf-8"))
+            cmd_type = self._command_str.split("|", 1)[0]
+            logger.info("[TCP发送] %s:%d ← %s", self._ip, TCP_CMD_PORT, cmd_type)
             self._commander.command_sent.emit(self._ip, self._command_str)
         except OSError as e:
             if self._is_expected_self_update_disconnect(e):
                 self._commander.command_sent.emit(self._ip, self._command_str)
             else:
+                logger.error("[TCP发送失败] %s:%d - %s", self._ip, TCP_CMD_PORT, e)
                 self._commander.command_failed.emit(self._ip, str(e))
         finally:
             sock.close()

@@ -47,6 +47,13 @@ def _setup_logging() -> None:
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 
+    # __name__ 解析为 master.app.xxx，需要同步配置 "master" logger
+    pkg_root = logging.getLogger("master")
+    pkg_root.setLevel(logging.INFO)
+    pkg_root.propagate = False
+    pkg_root.addHandler(console)
+    pkg_root.addHandler(file_handler)
+
 
 def _write_crash_log(exc_type, exc_value, exc_tb) -> None:
     """将未捕获异常追加写入 crash.log，同时保留默认 stderr 输出。"""
