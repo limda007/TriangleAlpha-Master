@@ -1899,18 +1899,34 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _oneClickStart(self) -> None:
-        """一键分发文件：批量选择文件，覆盖式传输到每个节点的脚本目录"""
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
-        if not paths:
+        """一键分发文件：支持选择文件或文件夹"""
+        dlg = MessageBox("分发模式", "选择要分发的内容类型：", self)
+        dlg.yesButton.setText("选择文件")
+        dlg.cancelButton.setText("选择文件夹")
+        if dlg.exec():
+            # 选择文件
+            paths, _ = QFileDialog.getOpenFileNames(self, "选择要分发的文件", "", "所有文件 (*)")
+            if not paths:
+                return
+            files_data = self._readFilesForDistribute(paths)
+        else:
+            # 选择文件夹
+            folder = QFileDialog.getExistingDirectory(self, "选择要分发的文件夹")
+            if not folder:
+                return
+            files_data = self._readFolderForDistribute(folder)
+        if files_data is None:
             return
-        nodes, selected = self._getSelectedOnlineNodes()
-        if not nodes:
+        if not files_data:
             InfoBar.warning(
-                "提示", "没有在线节点",
+                "提示", "没有找到可分发的文件",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
             return
-        ips = [node.ip for node in nodes]
+        self._distributeFiles(files_data)
+
+    def _readFilesForDistribute(self, paths: list[str]) -> list[tuple[str, bytes]] | None:
+        """读取文件列表，返回 (相对名, 内容) 列表"""
         files_data: list[tuple[str, bytes]] = []
         for p in paths:
             try:
@@ -1922,7 +1938,38 @@ class BigScreenInterface(ScrollArea):
                     "读取失败", f"{p}: {e}",
                     parent=self, position=InfoBarPosition.TOP, duration=5000,
                 )
-                return
+                return None
+        return files_data
+
+    def _readFolderForDistribute(self, folder: str) -> list[tuple[str, bytes]] | None:
+        """递归读取文件夹，返回 (相对路径, 内容) 列表"""
+        folder_path = Path(folder)
+        files_data: list[tuple[str, bytes]] = []
+        for fpath in sorted(folder_path.rglob("*")):
+            if not fpath.is_file():
+                continue
+            try:
+                raw = fpath.read_bytes()
+                rel = fpath.relative_to(folder_path).as_posix()
+                files_data.append((rel, raw))
+            except OSError as e:
+                InfoBar.error(
+                    "读取失败", f"{fpath}: {e}",
+                    parent=self, position=InfoBarPosition.TOP, duration=5000,
+                )
+                return None
+        return files_data
+
+    def _distributeFiles(self, files_data: list[tuple[str, bytes]]) -> None:
+        """将文件列表分发到选中/全部在线节点"""
+        nodes, selected = self._getSelectedOnlineNodes()
+        if not nodes:
+            InfoBar.warning(
+                "提示", "没有在线节点",
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+            return
+        ips = [node.ip for node in nodes]
         scope = f"{len(ips)} 个{'选中' if selected else '在线'}节点"
         if not selected and not self._confirmDangerous(
             "一键分发文件",
@@ -1935,7 +1982,7 @@ class BigScreenInterface(ScrollArea):
             else:
                 payload = base64.b64encode(raw).decode("ascii")
                 self._tcp.broadcast(ips, TcpCommand.EXT_SET_CONFIG, f"{filename}|BASE64:{payload}")
-        file_names = ", ".join(Path(p).name for p in paths)
+        file_names = ", ".join(name for name, _ in files_data)
         self._nm.add_history("一键分发文件", scope, file_names)
         detail = "（含 Slave 自更新）" if any(
             name.lower() == SLAVE_SELF_UPDATE_FILENAME.lower() for name, _content in files_data
