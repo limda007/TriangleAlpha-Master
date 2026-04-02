@@ -15,9 +15,9 @@ from master.app.common.config import RESOURCE_DIR
 from master.app.view.main_window import MainWindow
 
 # ── 日志配置 ──────────────────────────────────────────────
-# 日志直接存放在运行目录（cwd）下
+# 日志存放在 exe 所在目录（PyInstaller 打包后）或 cwd
 
-_RUN_DIR = Path.cwd()
+_RUN_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
 _CRASH_LOG = _RUN_DIR / "crash.log"
 _APP_LOG = _RUN_DIR / "master.log"
 
