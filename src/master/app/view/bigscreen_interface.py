@@ -241,9 +241,11 @@ class BigScreenInterface(ScrollArea):
         bottom.setSpacing(12)
 
         accountPanel = self._buildAccountPanel()
+        accountPanel.setMinimumWidth(400)
         bottom.addWidget(accountPanel, stretch=7)
 
         actionPanel = self._buildActionPanel()
+        actionPanel.setMinimumWidth(320)
         bottom.addWidget(actionPanel, stretch=3)
 
         bottomWidget = QWidget(self)
@@ -263,7 +265,8 @@ class BigScreenInterface(ScrollArea):
 
         self.setWidget(self.view)
         self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.view.setMinimumWidth(900)
 
         StyleSheet.BIGSCREEN_INTERFACE.apply(self)
 
@@ -430,20 +433,27 @@ class BigScreenInterface(ScrollArea):
         table.verticalHeader().hide()
 
         header = table.horizontalHeader()
-        header.setMinimumSectionSize(30)
+        header.setMinimumSectionSize(60)
+        # col 0: 状态点 — 固定
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(0, 40)
+        # col 1: 机器名 — 弹性
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # col 2: IP — 弹性
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        # col 3: 卡密 — 固定
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(3, 100)
+        # col 4: 账号 — 弹性
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        for col in range(5, len(_NODE_HEADERS)):
-            if col == 8:  # 运行状态
-                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-                table.setColumnWidth(col, 320)
-            else:
-                header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # col 5-7: 等级/金币/运行时间 — 自适应内容
+        for col in range(5, 8):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # col 8: 运行状态 — 弹性
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
+        # col 9-11: CPU/内存/显存 — 自适应内容
+        for col in range(9, len(_NODE_HEADERS)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         table.verticalHeader().setDefaultSectionSize(28)
 
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
