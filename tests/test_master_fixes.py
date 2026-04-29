@@ -155,6 +155,46 @@ class TestC4UdpListenerOversizeDatagram:
         assert len(received) == 1
         assert received[0][1] == "127.0.0.1"
 
+    def test_discover_master_replies_to_request_source(self):
+        from master.app.core.udp_listener import UdpListenerThread
+
+        sent: list[tuple[bytes, tuple[str, int]]] = []
+
+        class FakeSocket:
+            def setsockopt(self, *_args) -> None:
+                return None
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def bind(self, _addr: tuple[str, int]) -> None:
+                return None
+
+            def recvfrom(self, _size: int) -> tuple[bytes, tuple[str, int]]:
+                listener._running = False
+                return (
+                    b"DISCOVER_MASTER|A-08|0.3.0|1",
+                    ("10.1.3.88", 45678),
+                )
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                sent.append((data, addr))
+
+            def close(self) -> None:
+                return None
+
+        listener = UdpListenerThread(port=0)
+
+        with patch("master.app.core.udp_listener.socket.socket", return_value=FakeSocket()):
+            listener.run()
+
+        assert sent
+        assert sent[0][1] == ("10.1.3.88", 45678)
+        response = sent[0][0].decode("utf-8")
+        assert response.startswith("MASTER_HERE|")
+        parts = response.split("|")
+        assert parts[-3:] == ["9999", "8890", "1"]
+
 
 class TestC5MainWindowShutdownGuards:
     """验证主窗口关闭阶段不会继续访问已关闭数据库。"""

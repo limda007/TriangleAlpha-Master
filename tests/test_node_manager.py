@@ -96,6 +96,24 @@ class TestNodeManager:
         assert node.token_key == "TOKEN123"
         assert node.kami_code == "KAMI456"
 
+    def test_ext_online_tracks_astar_agent_identity(self):
+        msg = UdpMessage(
+            type=UdpMessageType.EXT_ONLINE,
+            machine_name="A-08",
+            user_name="Operator",
+            group="默认",
+            client_type="astar_agent",
+            agent_version="0.3.0",
+            protocol_version="1",
+        )
+
+        self.nm.handle_udp_message(msg, "10.1.3.88")
+
+        node = self.nm.nodes["A-08"]
+        assert node.client_type == "astar_agent"
+        assert node.agent_version == "0.3.0"
+        assert node.protocol_version == "1"
+
     def test_node_online_emits_on_offline_to_online(self):
         """离线→在线 应重新触发 node_online 信号。"""
         emitted: list[str] = []

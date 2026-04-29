@@ -78,6 +78,33 @@ class TestUdpProtocolContracts:
         assert parsed.teammate_fill == "1"
         assert parsed.weapon_config == "AK74"
         assert parsed.level_threshold == "18"
+        assert parsed.client_type == "slave"
+
+    def test_ext_online_roundtrip_includes_astar_agent_identity(self):
+        raw = build_udp_ext_online(
+            "A-08",
+            "Operator",
+            31.5,
+            58.0,
+            "1.2.0",
+            "默认",
+            token_key="TOKEN",
+            kami_code="KAMI",
+            client_type="astar_agent",
+            agent_version="0.3.0",
+            protocol_version="1",
+        )
+
+        parsed = parse_udp_message(raw)
+
+        assert parsed is not None
+        assert parsed.type == UdpMessageType.EXT_ONLINE
+        assert parsed.machine_name == "A-08"
+        assert parsed.token_key == "TOKEN"
+        assert parsed.kami_code == "KAMI"
+        assert parsed.client_type == "astar_agent"
+        assert parsed.agent_version == "0.3.0"
+        assert parsed.protocol_version == "1"
 
     def test_account_sync_roundtrip(self):
         """ACCOUNT_SYNC 消息构建→解析往返测试"""

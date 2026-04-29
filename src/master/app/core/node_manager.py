@@ -189,6 +189,9 @@ class NodeManager(QObject):
             kami_code=msg.kami_code,
             vram_used_mb=msg.vram_used_mb,
             vram_total_mb=msg.vram_total_mb,
+            client_type=msg.client_type,
+            agent_version=msg.agent_version,
+            protocol_version=msg.protocol_version,
         )
 
     def _handle_offline(self, msg: UdpMessage, _remote_ip: str) -> None:

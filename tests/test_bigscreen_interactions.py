@@ -311,6 +311,22 @@ def test_supports_self_update_hash_payload_requires_1_0_54_or_newer() -> None:
     assert _supports_self_update_hash_payload("1.1.0")
 
 
+def test_astar_agent_node_shows_client_type_label(bigscreen) -> None:
+    widget, node_manager, _commander, _account_db = bigscreen
+    node_manager.nodes["A-08"] = NodeInfo(
+        machine_name="A-08",
+        ip="10.0.0.8",
+        client_type="astar_agent",
+        agent_version="0.3.0",
+    )
+
+    widget._refreshNodeTable()
+
+    client_col = widget.table.columnCount() - 1
+    assert widget.table.horizontalHeaderItem(client_col).text() == "客户端"
+    assert widget.table.item(0, client_col).text() == "A星值守端 0.3.0"
+
+
 def test_clean_standalone_accounts_cleans_runtime_files(
     bigscreen,
     monkeypatch: pytest.MonkeyPatch,

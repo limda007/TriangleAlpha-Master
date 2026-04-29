@@ -28,6 +28,7 @@ IPC_TIMEOUT = 15            # IPC 数据过期阈值（秒）
 OFFLINE_TIMEOUT = 15
 DISCONNECT_TIMEOUT = 60
 TCP_SEND_TIMEOUT = 60
+PROTOCOL_VERSION = "1"
 SLAVE_SELF_UPDATE_FILENAME = "TriangleAlpha-Slave.exe"
 ACCOUNT_RUNTIME_CLEANUP_FILES = (
     "accounts.txt.imported",
@@ -99,6 +100,9 @@ class UdpMessage:
     kami_code: str = ""     # EXT_ONLINE: slave 端 kamis.txt 当前值
     vram_used_mb: int = 0   # GPU 显存已用 (MB)
     vram_total_mb: int = 0  # GPU 显存总量 (MB)
+    client_type: str = "slave"
+    agent_version: str = ""
+    protocol_version: str = ""
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -138,6 +142,9 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 kami_code=parts[12] if len(parts) >= 13 else "",
                 vram_used_mb=int(parts[13]) if len(parts) >= 14 and parts[13].isdigit() else 0,
                 vram_total_mb=int(parts[14]) if len(parts) >= 15 and parts[14].isdigit() else 0,
+                client_type=parts[15] if len(parts) >= 16 and parts[15] else "slave",
+                agent_version=parts[16] if len(parts) >= 17 else "",
+                protocol_version=parts[17] if len(parts) >= 18 else "",
             )
         case "ACCOUNT_SYNC" if len(parts) >= 3 and parts[2]:
             return UdpMessage(
@@ -164,12 +171,26 @@ def build_udp_ext_online(
     weapon_config: str = "", level_threshold: str = "",
     loot_count: str = "", token_key: str = "", kami_code: str = "",
     vram_used_mb: int = 0, vram_total_mb: int = 0,
+    client_type: str = "slave", agent_version: str = "",
+    protocol_version: str = "",
 ) -> str:
-    return (
+    msg = (
         f"EXT_ONLINE|{machine_name}|{user_name}|{cpu:.1f}|{mem:.1f}"
         f"|{version}|{group}|{teammate_fill}|{weapon_config}|{level_threshold}|{loot_count}|{token_key}|{kami_code}"
         f"|{vram_used_mb}|{vram_total_mb}"
     )
+    if client_type != "slave" or agent_version or protocol_version:
+        msg += f"|{client_type}|{agent_version}|{protocol_version}"
+    return msg
+
+
+def build_udp_master_here(
+    master_name: str,
+    tcp_cmd_port: int = TCP_CMD_PORT,
+    tcp_log_port: int = TCP_LOG_PORT,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> str:
+    return f"MASTER_HERE|{master_name}|{tcp_cmd_port}|{tcp_log_port}|{protocol_version}"
 
 
 def build_udp_offline(machine_name: str) -> str:

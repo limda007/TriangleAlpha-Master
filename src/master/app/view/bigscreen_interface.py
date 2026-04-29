@@ -121,7 +121,7 @@ class _BalanceWorker(QThread):
 
 _NODE_HEADERS = [
     "", "机器名", "IP地址", "卡密", "账号", "等级", "金币",
-    "运行时间", "运行状态", "CPU%", "内存%", "显存",
+    "运行时间", "运行状态", "CPU%", "内存%", "显存", "客户端",
 ]
 
 # 状态色
@@ -172,6 +172,14 @@ def _colored_dot_icon(color: QColor, size: int = 16) -> QIcon:
     painter.drawEllipse(2, 2, size - 4, size - 4)
     painter.end()
     return QIcon(px)
+
+
+def _node_client_label(node: NodeInfo) -> str:
+    if getattr(node, "client_type", "") == "astar_agent":
+        version = getattr(node, "agent_version", "").strip()
+        return f"A星值守端 {version}".strip()
+    version = getattr(node, "slave_version", "").strip()
+    return f"Slave {version}".strip() if version else "Slave"
 
 
 class BigScreenInterface(ScrollArea):
@@ -1072,6 +1080,7 @@ class BigScreenInterface(ScrollArea):
             f"{node.cpu_percent:.0f}%",
             f"{node.mem_percent:.0f}%",
             self._format_vram(node.vram_used_mb, node.vram_total_mb),
+            _node_client_label(node),
         ]
 
         # 状态列：彩色圆点图标

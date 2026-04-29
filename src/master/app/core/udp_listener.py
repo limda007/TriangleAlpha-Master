@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import errno
+import platform
 import socket
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from common.protocol import UDP_PORT, parse_udp_message
+from common.protocol import UDP_PORT, build_udp_master_here, parse_udp_message
 
 _MAX_UDP_PACKET_SIZE = 65_535
 _WSAEMSGSIZE = 10040
@@ -48,11 +49,18 @@ class UdpListenerThread(QThread):
                 raw = data.decode("utf-8", errors="ignore").strip()
                 if not raw:
                     continue
+                if raw.startswith("DISCOVER_MASTER|"):
+                    self._reply_discovery(sock, addr)
+                    continue
                 msg = parse_udp_message(raw)
                 if msg is not None:
                     self.message_received.emit(msg, addr[0])
         finally:
             sock.close()
+
+    def _reply_discovery(self, sock: socket.socket, addr: tuple[str, int]) -> None:
+        response = build_udp_master_here(platform.node())
+        sock.sendto(response.encode("utf-8"), addr)
 
     def stop(self) -> None:
         """请求停止并等待线程结束"""
