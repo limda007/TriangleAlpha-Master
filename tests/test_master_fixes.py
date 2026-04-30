@@ -75,11 +75,15 @@ class TestC3TcpSocketClose:
         mock_sock = MagicMock()
         mock_sock.connect.side_effect = ConnectionRefusedError("refused")
 
-        with patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock):
+        with (
+            patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock),
+            patch("master.app.core.tcp_commander.time.sleep"),
+            patch("master.app.core.tcp_commander.random.uniform", return_value=0.0),
+        ):
             task.run()
 
         # socket 必须被关闭
-        mock_sock.close.assert_called_once()
+        assert mock_sock.close.call_count == 4
         # 应发射 command_failed 信号
         commander.command_failed.emit.assert_called_once()
 
@@ -91,6 +95,7 @@ class TestC3TcpSocketClose:
         task = _TcpSendTask("1.2.3.4", "STARTEXE|", commander)
 
         mock_sock = MagicMock()
+        mock_sock.recv.return_value = b"OK\n"
         with patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock):
             task.run()
 
@@ -112,6 +117,88 @@ class TestC3TcpSocketClose:
             task.run()
 
         mock_sock.close.assert_called_once()
+        commander.command_failed.emit.assert_not_called()
+        commander.command_sent.emit.assert_called_once()
+
+    def test_transient_connect_failure_retries_then_succeeds(self):
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
+
+        commander = MagicMock(spec=TcpCommander)
+        commander.command_failed = MagicMock()
+        commander.command_sent = MagicMock()
+        task = _TcpSendTask("1.2.3.4", "STARTEXE|", commander)
+
+        fail_sock = MagicMock()
+        fail_sock.connect.side_effect = ConnectionRefusedError("refused")
+        ok_sock = MagicMock()
+        ok_sock.recv.return_value = b"OK\n"
+
+        with (
+            patch("master.app.core.tcp_commander.socket.socket", side_effect=[fail_sock, ok_sock]),
+            patch("master.app.core.tcp_commander.time.sleep") as sleep_mock,
+            patch("master.app.core.tcp_commander.random.uniform", return_value=0.0),
+        ):
+            task.run()
+
+        sleep_mock.assert_called_once_with(0.5)
+        commander.command_failed.emit.assert_not_called()
+        commander.command_sent.emit.assert_called_once()
+
+    def test_agent_rejected_command_is_not_retried(self):
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
+
+        commander = MagicMock(spec=TcpCommander)
+        commander.command_failed = MagicMock()
+        commander.command_sent = MagicMock()
+        task = _TcpSendTask("1.2.3.4", "DELETEFILE|..\\secret.txt", commander, require_ack=True)
+
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = "ERR|path_rejected|拒绝越权路径\n".encode("utf-8")
+        with patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock) as socket_mock:
+            task.run()
+
+        socket_mock.assert_called_once()
+        commander.command_sent.emit.assert_not_called()
+        commander.command_failed.emit.assert_called_once()
+        assert "path_rejected" in commander.command_failed.emit.call_args.args[1]
+
+    def test_agent_temporary_error_retries_with_backoff(self):
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
+
+        commander = MagicMock(spec=TcpCommander)
+        commander.command_failed = MagicMock()
+        commander.command_sent = MagicMock()
+        task = _TcpSendTask("1.2.3.4", "STARTEXE|", commander, require_ack=True)
+
+        fail_sock = MagicMock()
+        fail_sock.recv.return_value = "ERR|io_error|暂时写入失败\n".encode("utf-8")
+        ok_sock = MagicMock()
+        ok_sock.recv.return_value = b"OK\n"
+
+        with (
+            patch("master.app.core.tcp_commander.socket.socket", side_effect=[fail_sock, ok_sock]),
+            patch("master.app.core.tcp_commander.time.sleep") as sleep_mock,
+            patch("master.app.core.tcp_commander.random.uniform", return_value=0.0),
+        ):
+            task.run()
+
+        sleep_mock.assert_called_once_with(0.5)
+        commander.command_failed.emit.assert_not_called()
+        commander.command_sent.emit.assert_called_once()
+
+    def test_legacy_no_ack_is_accepted_for_backward_compatibility(self):
+        from master.app.core.tcp_commander import TcpCommander, _TcpSendTask
+
+        commander = MagicMock(spec=TcpCommander)
+        commander.command_failed = MagicMock()
+        commander.command_sent = MagicMock()
+        task = _TcpSendTask("1.2.3.4", "STARTEXE|", commander)
+
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = b""
+        with patch("master.app.core.tcp_commander.socket.socket", return_value=mock_sock):
+            task.run()
+
         commander.command_failed.emit.assert_not_called()
         commander.command_sent.emit.assert_called_once()
 
