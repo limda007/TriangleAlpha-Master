@@ -12,7 +12,12 @@ from PyQt6.QtCore import QItemSelectionModel
 from PyQt6.QtWidgets import QApplication, QHeaderView, QWidget
 
 from common.models import NodeInfo
-from common.protocol import ACCOUNT_RUNTIME_CLEANUP_PAYLOAD, TcpCommand, build_self_update_payload
+from common.protocol import (
+    ACCOUNT_RUNTIME_CLEANUP_FILES,
+    ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+    TcpCommand,
+    build_self_update_payload,
+)
 from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.kami_db import KamiDB
@@ -45,6 +50,19 @@ def bigscreen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, qapp: QApplicatio
     commander.stop()
     account_db.close()
     qapp.processEvents()
+
+
+class _AutoSelectFileMessageBox:
+    class _Button:
+        def setText(self, _text: str) -> None:
+            return
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.yesButton = self._Button()
+        self.cancelButton = self._Button()
+
+    def exec(self) -> bool:
+        return True
 
 
 def test_selection_change_resets_and_refills_config_panel(bigscreen, qapp: QApplication) -> None:
@@ -159,6 +177,52 @@ def test_context_menu_assign_kami_action_keeps_selected_nodes(
     kami_db.close()
 
 
+def test_context_menu_shows_account_resend_for_bound_node(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    widget, node_manager, _commander, account_db = bigscreen
+    account_db.import_fresh("u1----p1")
+    account_db.allocate("VM-01")
+    node_manager.nodes["VM-01"] = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+    widget._refreshNodeTable()
+    qapp.processEvents()
+
+    captured_menus: list[object] = []
+
+    class FakeAction:
+        def __init__(self, _icon, text: str, triggered):
+            self.text = text
+            self.triggered = triggered
+
+    class FakeMenu:
+        def __init__(self, parent=None) -> None:
+            self.parent = parent
+            self.actions: list[FakeAction] = []
+            captured_menus.append(self)
+
+        def addAction(self, action: FakeAction) -> None:
+            self.actions.append(action)
+
+        def addSeparator(self) -> None:
+            return
+
+        def exec(self, *_args, **_kwargs) -> None:
+            return
+
+    monkeypatch.setattr("master.app.view.bigscreen_interface.Action", FakeAction)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.RoundMenu", FakeMenu)
+
+    pos = widget.table.visualItemRect(widget.table.item(0, 0)).center()
+    widget._showNodeContextMenu(pos)
+
+    assert captured_menus
+    labels = [action.text for action in captured_menus[0].actions]
+    assert "释放绑定账号" in labels
+    assert "分配/重发账号" in labels
+
+
 def test_batch_assign_kami_to_nodes_accepts_unused_valid_kami(
     bigscreen,
     monkeypatch: pytest.MonkeyPatch,
@@ -228,6 +292,18 @@ def test_account_panel_refresh_only_loads_idle_accounts(bigscreen) -> None:
     assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed
 
 
+def test_account_panel_refresh_loads_idle_accounts_even_when_bottom_hidden(bigscreen) -> None:
+    widget, _node_manager, _commander, account_db = bigscreen
+    widget._bottomWidget.hide()
+    account_db.import_fresh("u1----p1\nu2----p2")
+    account_db.allocate("VM-01")
+
+    widget._flushAccountRefresh()
+
+    assert widget.accountTable.rowCount() == 1
+    assert widget.accountTable.item(0, 0).text() == "u2"
+
+
 def test_one_click_start_pushes_selected_files(
     bigscreen,
     monkeypatch: pytest.MonkeyPatch,
@@ -249,6 +325,7 @@ def test_one_click_start_pushes_selected_files(
     monkeypatch.setattr(widget, "_confirmDangerous", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(commander, "broadcast", broadcast_mock)
     monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", success_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.MessageBox", _AutoSelectFileMessageBox)
     monkeypatch.setattr(
         "master.app.view.bigscreen_interface.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(file1), str(file2)], ""),
@@ -289,6 +366,7 @@ def test_one_click_start_self_update_uses_legacy_payload_for_old_nodes(
     monkeypatch.setattr(widget, "_confirmDangerous", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(commander, "broadcast", broadcast_mock)
     monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", MagicMock())
+    monkeypatch.setattr("master.app.view.bigscreen_interface.MessageBox", _AutoSelectFileMessageBox)
     monkeypatch.setattr(
         "master.app.view.bigscreen_interface.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(exe_path)], ""),
@@ -309,6 +387,93 @@ def test_supports_self_update_hash_payload_requires_1_0_54_or_newer() -> None:
     assert not _supports_self_update_hash_payload("1.0.53")
     assert _supports_self_update_hash_payload("1.0.54")
     assert _supports_self_update_hash_payload("1.1.0")
+
+
+# ── 17.8: UPDATE_SELF 路由按 client_type 区分 (astar_agent 强制 modern) ──
+
+
+def test_one_click_start_self_update_routes_astar_agent_through_modern_payload(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """astar_agent 节点必须始终走 modern_payload, 即使 slave_version 为空."""
+    widget, node_manager, commander, _account_db = bigscreen
+    # Beta agent: client_type=astar_agent, 没有 slave_version (Beta 协议未填)
+    node_manager.nodes["BETA"] = NodeInfo(
+        machine_name="BETA",
+        ip="10.0.0.3",
+        client_type="astar_agent",
+        agent_version="0.3.0",
+        slave_version="",
+    )
+    widget._refreshNodeTable()
+
+    exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+    exe_path.write_bytes(b"new-binary")
+
+    broadcast_mock = MagicMock()
+    monkeypatch.setattr(widget, "_confirmDangerous", lambda *_a, **_kw: True)
+    monkeypatch.setattr(commander, "broadcast", broadcast_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", MagicMock())
+    monkeypatch.setattr("master.app.view.bigscreen_interface.MessageBox", _AutoSelectFileMessageBox)
+    monkeypatch.setattr(
+        "master.app.view.bigscreen_interface.QFileDialog.getOpenFileNames",
+        lambda *_a, **_kw: ([str(exe_path)], ""),
+    )
+
+    widget._oneClickStart()
+
+    modern_payload = build_self_update_payload(exe_path.name, exe_path.read_bytes())
+    assert broadcast_mock.call_args_list == [
+        call(["10.0.0.3"], TcpCommand.UPDATE_SELF, modern_payload),
+    ]
+
+
+def test_one_click_start_self_update_mixed_routes_astar_modern_legacy_old(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """混合: astar_agent → modern; 老 slave 1.0.53 → legacy; 老 slave 1.0.54 → modern."""
+    widget, node_manager, commander, _account_db = bigscreen
+    node_manager.nodes["BETA"] = NodeInfo(
+        machine_name="BETA", ip="10.0.0.3",
+        client_type="astar_agent", agent_version="0.3.0",
+    )
+    node_manager.nodes["OLD"] = NodeInfo(
+        machine_name="OLD", ip="10.0.0.1", slave_version="1.0.53",
+    )
+    node_manager.nodes["NEW"] = NodeInfo(
+        machine_name="NEW", ip="10.0.0.2", slave_version="1.0.54",
+    )
+    widget._refreshNodeTable()
+
+    exe_path = tmp_path / "TriangleAlpha-Slave.exe"
+    exe_path.write_bytes(b"mixed-bin")
+
+    broadcast_mock = MagicMock()
+    monkeypatch.setattr(widget, "_confirmDangerous", lambda *_a, **_kw: True)
+    monkeypatch.setattr(commander, "broadcast", broadcast_mock)
+    monkeypatch.setattr("master.app.view.bigscreen_interface.InfoBar.success", MagicMock())
+    monkeypatch.setattr("master.app.view.bigscreen_interface.MessageBox", _AutoSelectFileMessageBox)
+    monkeypatch.setattr(
+        "master.app.view.bigscreen_interface.QFileDialog.getOpenFileNames",
+        lambda *_a, **_kw: ([str(exe_path)], ""),
+    )
+
+    widget._oneClickStart()
+
+    legacy_payload = f"{exe_path.name}|{base64.b64encode(exe_path.read_bytes()).decode('ascii')}"
+    modern_payload = build_self_update_payload(exe_path.name, exe_path.read_bytes())
+
+    # 应该是 1 个 legacy(老 slave) + 1 个 modern(新 slave + astar_agent 合并)
+    # 顺序按 ip 列表生成顺序: BETA(10.0.0.3), OLD(10.0.0.1), NEW(10.0.0.2)
+    # legacy_ips = ["10.0.0.1"]; modern_ips = ["10.0.0.3", "10.0.0.2"]
+    assert broadcast_mock.call_args_list == [
+        call(["10.0.0.1"], TcpCommand.UPDATE_SELF, legacy_payload),
+        call(["10.0.0.3", "10.0.0.2"], TcpCommand.UPDATE_SELF, modern_payload),
+    ]
 
 
 def test_astar_agent_node_shows_client_type_label(bigscreen) -> None:
@@ -343,6 +508,35 @@ def test_clean_standalone_accounts_cleans_runtime_files(
 
     broadcast_mock.assert_called_once_with(
         ["10.0.0.1"],
+        TcpCommand.DELETE_FILE,
+        ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
+    )
+
+
+def test_account_cleanup_payload_covers_beta_agent_assignment_files() -> None:
+    assert "configs/accounts.txt" in ACCOUNT_RUNTIME_CLEANUP_FILES
+    assert "accounts.txt" in ACCOUNT_RUNTIME_CLEANUP_FILES
+    assert "runtime/agent_status.json" in ACCOUNT_RUNTIME_CLEANUP_FILES
+    assert "runtime/runtime_status.json" in ACCOUNT_RUNTIME_CLEANUP_FILES
+
+
+def test_release_node_account_cleans_remote_local_assignment(
+    bigscreen,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widget, node_manager, commander, account_db = bigscreen
+    account_db.import_fresh("u1----p1")
+    account_db.allocate("VM-01")
+    node_manager.nodes["VM-01"] = NodeInfo(machine_name="VM-01", ip="10.0.0.1")
+
+    send_mock = MagicMock()
+    monkeypatch.setattr(commander, "send", send_mock)
+
+    widget._releaseNodeAccount("VM-01")
+
+    assert account_db.get_account_for_machine("VM-01") is None
+    send_mock.assert_called_once_with(
+        "10.0.0.1",
         TcpCommand.DELETE_FILE,
         ACCOUNT_RUNTIME_CLEANUP_PAYLOAD,
     )
