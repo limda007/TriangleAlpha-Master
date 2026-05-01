@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-
-logger = logging.getLogger(__name__)
 from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
@@ -66,6 +64,8 @@ from master.app.common.style_sheet import StyleSheet
 from master.app.core.account_db import AccountDB
 from master.app.core.node_manager import NodeManager
 from master.app.core.tcp_commander import TcpCommander
+
+logger = logging.getLogger(__name__)
 
 _BALANCE_API = "http://gpu1.xinyuocr.xyz:8889/api/qrcode/balance"
 _SELF_UPDATE_HASH_MIN_VERSION = (1, 0, 54)
@@ -411,9 +411,7 @@ class BigScreenInterface(ScrollArea):
 
     def _flushAccountRefresh(self) -> None:
         self._refreshAccountStats()
-        # 仅在账号面板可见时才加载全量账号表格，减少不必要的 DB 查询和内存分配
-        if self._bottomWidget.isVisible():
-            self._doRefreshAccountTable()
+        self._doRefreshAccountTable()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._tableRefreshTimer.stop()
@@ -1495,9 +1493,6 @@ class BigScreenInterface(ScrollArea):
             bound_nodes = [
                 node for node in online_nodes if self._pool.get_account_for_machine(node.machine_name)
             ]
-            unbound_nodes = [
-                node for node in online_nodes if not self._pool.get_account_for_machine(node.machine_name)
-            ]
             if bound_nodes:
                 label = (
                     f"释放绑定账号 ({len(bound_nodes)})"
@@ -1510,16 +1505,16 @@ class BigScreenInterface(ScrollArea):
                         triggered=lambda _checked=False, nodes=bound_nodes: self._releaseNodeAccounts(nodes),
                     )
                 )
-            if unbound_nodes:
+            if online_nodes:
                 label = (
-                    f"分配账号 ({len(unbound_nodes)})"
-                    if from_selection or len(unbound_nodes) > 1 else "分配账号"
+                    f"分配/重发账号 ({len(online_nodes)})"
+                    if from_selection or len(online_nodes) > 1 else "分配/重发账号"
                 )
                 menu.addAction(
                     Action(
                         FIF.ADD,
                         label,
-                        triggered=lambda _checked=False, nodes=unbound_nodes: self._allocateNodeAccounts(nodes),
+                        triggered=lambda _checked=False, nodes=online_nodes: self._allocateNodeAccounts(nodes),
                     )
                 )
 
@@ -1810,7 +1805,10 @@ class BigScreenInterface(ScrollArea):
 
     def _releaseNodeAccount(self, machine_name: str) -> None:
         """释放节点绑定的账号"""
+        account = self._pool.get_account_for_machine(machine_name)
         self._pool.release(machine_name)
+        if account is not None:
+            self._requestNodeAccountCleanup(machine_name)
         InfoBar.success(
             "已释放", f"{machine_name} 绑定账号已释放",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
@@ -1827,12 +1825,19 @@ class BigScreenInterface(ScrollArea):
         for node in nodes:
             if self._pool.get_account_for_machine(node.machine_name):
                 self._pool.release(node.machine_name)
+                self._requestNodeAccountCleanup(node.machine_name)
                 released += 1
         if released:
             InfoBar.success(
                 "已释放", f"已释放 {released} 个节点的绑定账号",
                 parent=self, position=InfoBarPosition.TOP, duration=2000,
             )
+
+    def _requestNodeAccountCleanup(self, machine_name: str) -> None:
+        node = self._nm.nodes.get(machine_name)
+        if node is None or not node.ip:
+            return
+        self._tcp.send(node.ip, TcpCommand.DELETE_FILE, ACCOUNT_RUNTIME_CLEANUP_PAYLOAD)
 
     def _allocateNodeAccount(self, machine_name: str, ip: str) -> None:
         """为单节点分配账号"""
@@ -2012,11 +2017,19 @@ class BigScreenInterface(ScrollArea):
         )
 
     def _broadcast_self_update(self, nodes: list, filename: str, raw: bytes) -> None:
-        """按节点版本拆分自更新协议，兼容旧版 slave 的升级链路。"""
+        """按节点协议能力拆分自更新链路。
+
+        路由优先级 (跨仓硬同步):
+        1. client_type == 'astar_agent' (Beta agent) → 强制 modern_payload (含 SHA256/SIZE),
+           因为 Beta 端 _parse_self_update_payload 只接受新协议; 与 slave_version 无关.
+        2. 老 slave 节点按 slave_version 判断: ≥1.0.54 走 modern, 否则 legacy.
+        """
         legacy_ips: list[str] = []
         modern_ips: list[str] = []
         for node in nodes:
-            if _supports_self_update_hash_payload(getattr(node, "slave_version", "")):
+            if getattr(node, "client_type", "") == "astar_agent":
+                modern_ips.append(node.ip)
+            elif _supports_self_update_hash_payload(getattr(node, "slave_version", "")):
                 modern_ips.append(node.ip)
             else:
                 legacy_ips.append(node.ip)
