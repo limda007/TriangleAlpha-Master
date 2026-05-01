@@ -318,14 +318,18 @@ class TestProtocolCompatibility:
     """验证所有 TcpCommand 枚举值在 slave 有对应 handler"""
 
     def test_all_commands_have_handlers(self):
-        """每个 TcpCommand 的 value 都应在 slave _dispatch 中被处理"""
+        """每个 TcpCommand 的 value 都应在 slave _dispatch 中被处理.
+
+        例外: ``UPDATE_TXT_APPEND`` 仅 BETA agent 实现 (P3 doc §4.5.1),
+        slave 不会收到也无需 dispatcher, 因此跳过.
+        """
         import inspect
 
         from slave.command_handler import CommandHandler
 
         dispatch_source = inspect.getsource(CommandHandler._dispatch)
-
-        for cmd in TcpCommand:
+        slave_only = (cmd for cmd in TcpCommand if cmd.name != "UPDATE_TXT_APPEND")
+        for cmd in slave_only:
             found = cmd.value in dispatch_source or cmd.name in dispatch_source
             assert found, f"TcpCommand.{cmd.name} ({cmd.value}) 在 _dispatch 中无对应 handler"
 

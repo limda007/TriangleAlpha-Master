@@ -1,9 +1,16 @@
+import base64
+
+import pytest
+
 from common.protocol import (
+    ACCOUNT_APPEND_WHITELIST,
     TcpCommand,
     UdpMessageType,
     build_tcp_command,
+    build_tcp_update_txt_append,
     build_udp_account_sync,
     build_udp_ext_online,
+    build_udp_need_account,
     build_udp_online,
     build_udp_status,
     parse_tcp_command,
@@ -116,6 +123,26 @@ class TestParseUdp:
         assert msg is not None
         assert msg.type == UdpMessageType.NEED_ACCOUNT
         assert msg.machine_name == "VM-01"
+        assert msg.count == 1  # 老协议默认 1
+
+    def test_parse_need_account_with_count(self):
+        """NEED_ACCOUNT 第三段为期望批量数量 (P3)"""
+        msg = parse_udp_message("NEED_ACCOUNT|VM-01|3")
+        assert msg is not None
+        assert msg.machine_name == "VM-01"
+        assert msg.count == 3
+
+    def test_parse_need_account_invalid_count_falls_back_to_one(self):
+        """非数字/负数/0 一律回退为 1, 不报错"""
+        for raw in (
+            "NEED_ACCOUNT|VM-01|abc",
+            "NEED_ACCOUNT|VM-01|0",
+            "NEED_ACCOUNT|VM-01|-2",
+            "NEED_ACCOUNT|VM-01|",
+        ):
+            msg = parse_udp_message(raw)
+            assert msg is not None, raw
+            assert msg.count == 1, raw
 
 
 class TestBuildUdp:
@@ -143,6 +170,59 @@ class TestBuildUdp:
         assert result == "STATUS|VM-01|升级中|18|12450|正在升级|120|"
         result_st = build_udp_status("VM-01", "升级中", 18, "12450", "正在升级", "120", "等待匹配")
         assert result_st == "STATUS|VM-01|升级中|18|12450|正在升级|120|等待匹配"
+
+
+class TestUpdateTxtAppend:
+    """P3: UPDATETXT_APPEND 批量追加账号 wire 协议"""
+
+    def test_round_trip_accounts_txt(self):
+        cmd = build_tcp_update_txt_append("accounts.txt", "u1----p1\nu2----p2\n")
+        head, path, encoded = cmd.split("|", 2)
+        assert head == "UPDATETXT_APPEND"
+        assert path == "accounts.txt"
+        assert base64.b64decode(encoded).decode("utf-8") == "u1----p1\nu2----p2\n"
+
+    def test_normalizes_backslash(self):
+        cmd = build_tcp_update_txt_append("configs\\accounts.txt", "x----y\n")
+        assert cmd.split("|", 2)[1] == "configs/accounts.txt"
+
+    def test_rejects_non_whitelisted_path(self):
+        with pytest.raises(ValueError, match="ACCOUNT_APPEND_WHITELIST"):
+            build_tcp_update_txt_append("../etc/passwd", "x")
+        with pytest.raises(ValueError, match="ACCOUNT_APPEND_WHITELIST"):
+            build_tcp_update_txt_append("token.txt", "x")
+
+    def test_rejects_empty_path(self):
+        with pytest.raises(ValueError, match="不能为空"):
+            build_tcp_update_txt_append("   ", "x")
+
+    def test_rejects_separator_in_path(self):
+        with pytest.raises(ValueError, match="ACCOUNT_APPEND_WHITELIST"):
+            build_tcp_update_txt_append("ac|counts.txt", "x")
+
+    def test_whitelist_constant_is_frozen(self):
+        assert isinstance(ACCOUNT_APPEND_WHITELIST, frozenset)
+        assert "accounts.txt" in ACCOUNT_APPEND_WHITELIST
+        assert "configs/accounts.txt" in ACCOUNT_APPEND_WHITELIST
+
+
+class TestBuildUdpNeedAccount:
+    """P3: NEED_ACCOUNT 第三段批量数量 (向后兼容)"""
+
+    def test_default_legacy_two_segments(self):
+        assert build_udp_need_account("VM-01") == "NEED_ACCOUNT|VM-01"
+
+    def test_count_one_stays_legacy(self):
+        assert build_udp_need_account("VM-01", count=1) == "NEED_ACCOUNT|VM-01"
+
+    def test_count_above_one_appends_third_segment(self):
+        assert build_udp_need_account("VM-01", count=3) == "NEED_ACCOUNT|VM-01|3"
+
+    def test_round_trip(self):
+        msg = parse_udp_message(build_udp_need_account("VM-01", count=5))
+        assert msg is not None and msg.count == 5
+        msg2 = parse_udp_message(build_udp_need_account("VM-02"))
+        assert msg2 is not None and msg2.count == 1
 
 
 class TestBuildTcp:

@@ -235,11 +235,14 @@ class TestH7SlaveExtQuery:
         assert not hasattr(TcpCommand, "EXT_QUERY")
 
     def test_remaining_commands(self):
+        # UPDATE_TXT_APPEND 仅 BETA agent 实现 (P3 doc §4.5.1), slave 不需 dispatcher,
+        # 因此从 slave 端"应包含"集合中过滤掉.
         expected = {
             "UPDATE_TXT", "UPDATE_SELF", "START_EXE", "STOP_EXE", "REBOOT_PC",
             "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP", "EXT_SET_CONFIG", "PUSH_KAMI",
         }
-        assert {m.name for m in TcpCommand} == expected
+        slave_required = {m.name for m in TcpCommand} - {"UPDATE_TXT_APPEND"}
+        assert slave_required == expected
 
 
 # ── H9: 精确进程匹配 ──
