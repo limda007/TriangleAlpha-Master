@@ -51,6 +51,14 @@ class AppConfig(QConfig):
     platformPassword = ConfigItem("Platform", "Password", "", None)
     platformGroupName = ConfigItem("Platform", "GroupName", "", None)
 
+    # ── 中控发现 (机房多客户租户隔离) ────────────────────────
+    # tenantId 非空 → 仅响应 / 接受同租户的 agent / master.
+    # strictTenant=True → 拒绝任意一端为空的混合配置, 防误绑.
+    # masterName 用于 MASTER_HERE 应答标识, 默认空 → 由 udp_listener 退化到 platform.node().
+    tenantId = ConfigItem("Discovery", "TenantId", "", None)
+    strictTenant = ConfigItem("Discovery", "StrictTenant", True, BoolValidator())
+    masterName = ConfigItem("Discovery", "MasterName", "", None)
+
 
 cfg = AppConfig()
 qconfig.load(str(CONFIG_DIR / "config.json"), cfg)
