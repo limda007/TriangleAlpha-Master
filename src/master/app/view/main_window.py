@@ -61,10 +61,22 @@ class MainWindow(FluentWindow):
         # 核心服务
         self.nodeManager = NodeManager(self)
         self.tcpCommander = TcpCommander(parent=self)
+        # 17.7: 让 TcpCommander 能按 client_type 自适应启用强 ACK
+        # (Beta agent 必走强 ACK; 老 slave 保持兼容)
+        self.tcpCommander.set_client_type_resolver(
+            lambda ip: getattr(self.nodeManager.get_node_by_ip(ip), "client_type", None)
+        )
         self.accountPool = AccountDB(_get_db_path(), parent=self)
         self.kamiDB = KamiDB(_get_db_path(), parent=self, conn=self.accountPool._conn)
-        self.udpListener = UdpListenerThread(port=cfg.get(cfg.udpPort), parent=self)
+        self.udpListener = UdpListenerThread(
+            port=cfg.get(cfg.udpPort),
+            parent=self,
+            local_tenant=cfg.get(cfg.tenantId),
+            strict_tenant=cfg.get(cfg.strictTenant),
+            master_name=cfg.get(cfg.masterName),
+        )
         self.udpListener.message_received.connect(self.nodeManager.handle_udp_message)
+        self.udpListener.bind_failed.connect(self._onUdpBindFailed)
         self.logReceiver = LogReceiverThread(port=cfg.get(cfg.tcpLogPort), parent=self)
         self.logReceiver.error_occurred.connect(self._onLogReceiverError)
 
@@ -193,6 +205,18 @@ class MainWindow(FluentWindow):
         InfoBar.error(
             "日志服务异常", msg,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
+
+    def _onUdpBindFailed(self, port: int, msg: str) -> None:
+        """UDP 监听 bind 失败 → 显著告警, 否则 agent 永远发现不到 master."""
+        InfoBar.error(
+            "UDP 监听启动失败",
+            f"端口 {port} 绑定失败: {msg}\n"
+            f"请检查端口是否被其他进程占用 (netstat -ano | findstr {port}), "
+            f"或防火墙是否拦截. agent 将无法自动发现本机.",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=-1,  # 不自动关闭
         )
 
     def _purgeStaleData(self) -> None:
