@@ -108,6 +108,7 @@ class UdpMessage:
     client_type: str = "slave"
     agent_version: str = ""
     protocol_version: str = ""
+    count: int = 1  # NEED_ACCOUNT 期望批量下发数量 (P3, 默认 1 保持向后兼容)
 
 
 def parse_udp_message(raw: str) -> UdpMessage | None:
@@ -158,9 +159,16 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 sync_payload=parts[2],
             )
         case "NEED_ACCOUNT" if len(parts) >= 2:
+            # P3: 可选第三段为期望数量, 非法/缺失 → 退化为 1
+            count = 1
+            if len(parts) >= 3 and parts[2].isdigit():
+                parsed = int(parts[2])
+                if parsed >= 1:
+                    count = parsed
             return UdpMessage(
                 type=UdpMessageType.NEED_ACCOUNT,
                 machine_name=parts[1],
+                count=count,
             )
     logger.debug("未识别的 UDP 消息: %s", parts[0] if parts else "(empty)")
     return None
@@ -261,12 +269,28 @@ def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:
     return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}"
 
 
-def build_udp_need_account(machine_name: str) -> str:
-    return f"NEED_ACCOUNT|{machine_name}"
+def build_udp_need_account(machine_name: str, count: int = 1) -> str:
+    """构造 NEED_ACCOUNT wire 文本.
+
+    向后兼容: ``count <= 1`` 输出 2 段 (老 master 可解析);
+    ``count > 1`` 附加第三段供新 master 下发批量账号.
+    """
+    if count <= 1:
+        return f"NEED_ACCOUNT|{machine_name}"
+    return f"NEED_ACCOUNT|{machine_name}|{count}"
+
+
+# UPDATETXT_APPEND 允许写入的相对路径白名单.
+# 所有路径后台统一以 forward slash 存储/比对, agent 写盘时才转为平台分隔符.
+ACCOUNT_APPEND_WHITELIST: frozenset[str] = frozenset({
+    "accounts.txt",
+    "configs/accounts.txt",
+})
 
 
 class TcpCommand(enum.Enum):
     UPDATE_TXT = "UPDATETXT"
+    UPDATE_TXT_APPEND = "UPDATETXT_APPEND"  # P3: 追加写入 (仅 BETA agent 实现)
     UPDATE_SELF = "UPDATESELF"
     START_EXE = "STARTEXE"
     STOP_EXE = "STOPEXE"
@@ -295,6 +319,23 @@ def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
     ) and payload:
         return f"{cmd.value}|{payload}"
     return f"{cmd.value}|"
+
+
+def build_tcp_update_txt_append(rel_path: str, content: str) -> str:
+    """构造 ``UPDATETXT_APPEND|<rel_path>|<base64>`` (P3 批量账号追加).
+
+    只允许 :data:`ACCOUNT_APPEND_WHITELIST` 中的路径, 绝对路径/上级/分隔符均拒绝.
+    base64 包 utf-8 在外, 避免 wire 对换行/竖线敏感.
+    """
+    rel_norm = rel_path.replace("\\", "/").strip()
+    if not rel_norm:
+        raise ValueError("rel_path 不能为空")
+    if any(sep in rel_norm for sep in ("|", "\n", "\r")) or rel_norm not in ACCOUNT_APPEND_WHITELIST:
+        raise ValueError(
+            f"rel_path 未列入 ACCOUNT_APPEND_WHITELIST: {rel_path!r}",
+        )
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    return f"{TcpCommand.UPDATE_TXT_APPEND.value}|{rel_norm}|{encoded}"
 
 
 def build_self_update_payload(filename: str, raw: bytes) -> str:
