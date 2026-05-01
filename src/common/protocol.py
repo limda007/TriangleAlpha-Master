@@ -33,7 +33,12 @@ SLAVE_SELF_UPDATE_FILENAME = "TriangleAlpha-Slave.exe"
 ACCOUNT_RUNTIME_CLEANUP_FILES = (
     "accounts.txt.imported",
     "accounts.json",
+    "configs/accounts.json",
+    "accounts.txt",
+    "configs/accounts.txt",
     "runtime_status.json",
+    "runtime/runtime_status.json",
+    "runtime/agent_status.json",
 )
 ACCOUNT_RUNTIME_CLEANUP_PAYLOAD = "|".join(ACCOUNT_RUNTIME_CLEANUP_FILES)
 
@@ -189,8 +194,56 @@ def build_udp_master_here(
     tcp_cmd_port: int = TCP_CMD_PORT,
     tcp_log_port: int = TCP_LOG_PORT,
     protocol_version: str = PROTOCOL_VERSION,
+    tenant_id: str = "",
 ) -> str:
-    return f"MASTER_HERE|{master_name}|{tcp_cmd_port}|{tcp_log_port}|{protocol_version}"
+    """构造 ``MASTER_HERE`` wire 文本.
+
+    向后兼容: ``tenant_id`` 为空时退化为 5 段(老 agent 可解析); 非空时附加第 6 段.
+    """
+    for label, value in (
+        ("master_name", master_name),
+        ("protocol_version", protocol_version),
+        ("tenant_id", tenant_id),
+    ):
+        if "|" in value or "\n" in value or "\r" in value:
+            raise ValueError(f"{label} contains forbidden separator: {value!r}")
+    base = f"MASTER_HERE|{master_name}|{tcp_cmd_port}|{tcp_log_port}|{protocol_version}"
+    if tenant_id:
+        return f"{base}|{tenant_id}"
+    return base
+
+
+def parse_discover_master(raw: str) -> tuple[str, str, str, str] | None:
+    """解析 agent 端 ``DISCOVER_MASTER`` wire 文本.
+
+    Returns:
+        ``(machine_name, agent_version, protocol_version, tenant_id)`` 或 ``None``.
+        旧 agent 4 段(无 tenant) → tenant_id 为空字符串; 新 agent 5 段;
+        其它形态一律 ``None``.
+    """
+    parts = raw.strip().split("|")
+    if len(parts) not in (4, 5) or parts[0] != "DISCOVER_MASTER":
+        return None
+    tenant = parts[4] if len(parts) == 5 else ""
+    return (parts[1], parts[2], parts[3], tenant)
+
+
+def should_reply_to_discovery(
+    remote_tenant: str,
+    *,
+    local_tenant: str,
+    strict: bool = True,
+) -> bool:
+    """租户匹配判定 (与 agent 侧 TenantPolicy 对称).
+
+    机房同 LAN 多客户共存时, master 仅应回复同租户 agent 的发现请求.
+    严格模式拒绝任意一端为空的混合配置以防误绑.
+    """
+    if local_tenant == "" and remote_tenant == "":
+        return True
+    if local_tenant == "" or remote_tenant == "":
+        return not strict
+    return local_tenant == remote_tenant
 
 
 def build_udp_offline(machine_name: str) -> str:
