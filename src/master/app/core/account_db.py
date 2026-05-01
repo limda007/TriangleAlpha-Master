@@ -55,6 +55,14 @@ _LEGACY_STATUS_MAP = {
 }
 _EXPECTED_STATUS_TOKENS = ("'空闲中'", "'运行中'", "'已完成'", "'已取号'", "'已封禁'", "'已删除'")
 
+# `_released_account_blocks` 是进程内存集合 (machine, username), 记录刚被 release 过、
+# 但 slave/agent 可能正在 in-flight 上报 STATUS 的账号. 出现在集合中的 (machine,
+# username) 在 update_from_status 里会被忽略自动绑定逻辑, 防止刚释放的账号被同
+# 一 STATUS 梦回运行中. 不持久化: master 重启后该记录会丢失 (可接受).
+# 由于在长跑进程中 release-allocate 循环可能永远不能终止, 需设上界防止无限增长.
+# 超过上界后采用 FIFO 丢最旧条目 (近期释放的仍然受保护).
+_RELEASE_BLOCK_MAX_ENTRIES = 4096
+
 
 class AccountDB(QObject):
     """SQLite 持久化账号池
@@ -76,6 +84,9 @@ class AccountDB(QObject):
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._write_lock = self._get_write_lock(self._db_path)
+        # 使用 dict 模拟有序集合 (Python 3.7+ 保证插入顺序); value 为插入计数仅为占位.
+        # 上界 依赖 :data:`_RELEASE_BLOCK_MAX_ENTRIES`, 超过后从头部丢丢 (FIFO) 防止无限增长.
+        self._released_account_blocks: dict[tuple[str, str], None] = {}
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
         # 迁移：修正旧版状态值
@@ -90,6 +101,28 @@ class AccountDB(QObject):
         self._in_use = 0
         self._completed = 0
         self._refresh_counts()
+
+    # ── release-block 集合 (内部) ──────────────────────────
+
+    def _release_block_add(self, machine: str, username: str) -> None:
+        """记录刚 release 的 (machine, username), 用于阻断同账号被 STATUS 自动重绑.
+
+        超过 :data:`_RELEASE_BLOCK_MAX_ENTRIES` 时按 FIFO 丢最旧条目.
+        """
+        key = (machine, username)
+        # 重新插入以更新 FIFO 位置 (类似 LRU)
+        self._released_account_blocks.pop(key, None)
+        self._released_account_blocks[key] = None
+        # 防膨胀: 超上限丢最旧 (插入顺序最前)
+        while len(self._released_account_blocks) > _RELEASE_BLOCK_MAX_ENTRIES:
+            oldest_key = next(iter(self._released_account_blocks))
+            del self._released_account_blocks[oldest_key]
+
+    def _release_block_discard(self, machine: str, username: str) -> None:
+        self._released_account_blocks.pop((machine, username), None)
+
+    def _is_release_blocked(self, machine: str, username: str) -> bool:
+        return (machine, username) in self._released_account_blocks
 
     def close(self) -> None:
         """关闭数据库连接"""
@@ -219,6 +252,7 @@ class AccountDB(QObject):
                 changed = row is not None
         if row is None:
             return None
+        self._release_block_discard(machine, row["username"])
         if changed:
             self._refresh_counts()
             self.pool_changed.emit()
@@ -238,12 +272,23 @@ class AccountDB(QObject):
 
     def release(self, machine_name: str) -> None:
         """运行中 → 空闲中，解绑机器"""
-        self._conn.execute(
-            "UPDATE accounts SET status='空闲中', assigned_machine='' "
-            "WHERE status='运行中' AND assigned_machine=?",
-            (machine_name,),
-        )
-        self._conn.commit()
+        machine = machine_name.strip()
+        if not machine:
+            return
+        with self._write_transaction():
+            rows = self._conn.execute(
+                "SELECT username FROM accounts WHERE status='运行中' AND assigned_machine=?",
+                (machine,),
+            ).fetchall()
+            if not rows:
+                return
+            self._conn.execute(
+                "UPDATE accounts SET status='空闲中', assigned_machine='' "
+                "WHERE status='运行中' AND assigned_machine=?",
+                (machine,),
+            )
+        for row in rows:
+            self._release_block_add(machine, row["username"])
         self._refresh_counts()
         self.pool_changed.emit()
 
@@ -260,6 +305,8 @@ class AccountDB(QObject):
         - jin_bi 仅在新值非零时更新，防止 IPC 超时/脚本停止导致零值覆盖
         - login_at 仅在当前为空时填充（COALESCE），防止覆盖已有登录时间
         """
+        machine = machine_name.strip()
+        current_account = current_account.strip()
         login_at_val = self._normalize_timestamp_text(login_at) or None
         # 零值保护：level 只增不减，jin_bi 零值不覆盖
         if jin_bi and jin_bi != "0":
@@ -267,16 +314,18 @@ class AccountDB(QObject):
                 "UPDATE accounts SET level=MAX(level, ?), jin_bi=?, "
                 "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (level, jin_bi, login_at_val, machine_name),
+                (level, jin_bi, login_at_val, machine),
             ).rowcount
         else:
             changed = self._conn.execute(
                 "UPDATE accounts SET level=MAX(level, ?), "
                 "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (level, login_at_val, machine_name),
+                (level, login_at_val, machine),
             ).rowcount
         if not changed and current_account:
+            if self._is_release_blocked(machine, current_account):
+                return
             # 账号未经 allocate，但 TestDemo 已在使用 → 自动绑定
             # 自动绑定时也应用零值保护
             if jin_bi and jin_bi != "0":
@@ -286,7 +335,7 @@ class AccountDB(QObject):
                     "last_login_at=COALESCE(last_login_at, ?) "
                     "WHERE username=? AND (status='空闲中' "
                     "OR (status='运行中' AND assigned_machine IN ('', ?)))",
-                    (level, jin_bi, machine_name, login_at_val, current_account, machine_name),
+                    (level, jin_bi, machine, login_at_val, current_account, machine),
                 ).rowcount
             else:
                 changed = self._conn.execute(
@@ -295,17 +344,19 @@ class AccountDB(QObject):
                     "last_login_at=COALESCE(last_login_at, ?) "
                     "WHERE username=? AND (status='空闲中' "
                     "OR (status='运行中' AND assigned_machine IN ('', ?)))",
-                    (level, machine_name, login_at_val, current_account, machine_name),
+                    (level, machine, login_at_val, current_account, machine),
                 ).rowcount
         if not changed:
             return
+        if current_account:
+            self._release_block_discard(machine, current_account)
         if state == "已完成":
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._conn.execute(
                 "UPDATE accounts SET status='已完成', completed_at=?, "
                 "last_login_at=COALESCE(last_login_at, ?) "
                 "WHERE status='运行中' AND assigned_machine=?",
-                (now, login_at_val, machine_name),
+                (now, login_at_val, machine),
             )
         self._conn.commit()
         self._refresh_counts()

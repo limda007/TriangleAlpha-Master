@@ -222,6 +222,66 @@ class TestRelease:
         acc = db.get_all_accounts()[0]
         assert acc.assigned_machine == ""
 
+    def test_release_blocks_same_account_status_from_rebinding(self, db: AccountDB) -> None:
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+
+        db.release("VM-01")
+        db.update_from_status("VM-01", 10, "5000", "运行中", current_account="u1")
+
+        assert db.get_account_for_machine("VM-01") is None
+        acc = db.get_all_accounts()[0]
+        assert acc.status == AccountStatus.IDLE
+        assert acc.assigned_machine == ""
+
+    def test_release_block_does_not_affect_other_machine(self, db: AccountDB) -> None:
+        """release VM-01 不应阻止同账号被 VM-02 通过 STATUS 自动绑定 (按 (machine, username) 隔离)."""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.release("VM-01")
+
+        # 另一台机器跑同一账号 (例如手动迁移) → 应允许自动绑定
+        db.update_from_status("VM-02", 10, "5000", "运行中", current_account="u1")
+
+        bound = db.get_account_for_machine("VM-02")
+        assert bound is not None
+        assert bound.username == "u1"
+
+    def test_reallocate_clears_release_block(self, db: AccountDB) -> None:
+        """release 后再次 allocate 同账号到同机器 → block 应被清除, STATUS 可正常绑定."""
+        db.import_fresh("u1----p1")
+        db.allocate("VM-01")
+        db.release("VM-01")
+        # 重新分配 → 由于池里只有一个号, 应再次分到 u1
+        again = db.allocate("VM-01")
+        assert again is not None and again.username == "u1"
+        # 此时 STATUS 应能正常更新, 不被 block 拦截
+        db.update_from_status("VM-01", 20, "9000", "运行中", current_account="u1")
+        bound = db.get_account_for_machine("VM-01")
+        assert bound is not None and bound.level == 20
+
+    def test_release_block_is_bounded_under_churn(self, db: AccountDB) -> None:
+        """长跑场景: release-allocate 循环远超上界, 集合不应无限增长."""
+        from master.app.core.account_db import _RELEASE_BLOCK_MAX_ENTRIES
+
+        # 制造略超上界的不同 (machine, username)
+        churn = _RELEASE_BLOCK_MAX_ENTRIES + 50
+        for i in range(churn):
+            db._release_block_add(f"VM-{i:05d}", f"u{i}")  # noqa: SLF001
+        assert len(db._released_account_blocks) <= _RELEASE_BLOCK_MAX_ENTRIES  # noqa: SLF001
+        # 最旧条目已被淘汰
+        assert ("VM-00000", "u0") not in db._released_account_blocks  # noqa: SLF001
+        # 最新条目仍在
+        assert (f"VM-{churn - 1:05d}", f"u{churn - 1}") in db._released_account_blocks  # noqa: SLF001
+
+    def test_release_block_reinsert_refreshes_position(self, db: AccountDB) -> None:
+        """重复 release 同 (machine, username) 不重复占位且刷新 FIFO 顺序."""
+        db._release_block_add("VM-01", "u1")  # noqa: SLF001
+        db._release_block_add("VM-02", "u2")  # noqa: SLF001
+        db._release_block_add("VM-01", "u1")  # noqa: SLF001 — 重新插入
+        keys = list(db._released_account_blocks.keys())  # noqa: SLF001
+        assert keys == [("VM-02", "u2"), ("VM-01", "u1")]
+
     def test_release_nonexistent(self, db: AccountDB) -> None:
         db.import_fresh("u1----p1")
         db.release("VM-NONE")  # 静默忽略
