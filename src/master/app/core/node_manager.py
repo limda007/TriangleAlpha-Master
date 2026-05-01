@@ -112,6 +112,13 @@ class NodeManager(QObject):
         """按分组筛选节点"""
         return [n for n in self.nodes.values() if n.group == group]
 
+    def get_node_by_ip(self, ip: str) -> NodeInfo | None:
+        """按 IP 反查节点 (供 TcpCommander 决定是否走强 ACK)."""
+        for node in self.nodes.values():
+            if node.ip == ip:
+                return node
+        return None
+
     # ── 属性 ───────────────────────────────────────────────
 
     @property

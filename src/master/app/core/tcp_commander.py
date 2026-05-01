@@ -7,10 +7,16 @@ import os
 import random
 import socket
 import time
+from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 from common.protocol import TCP_CMD_PORT, TCP_SEND_TIMEOUT, TcpCommand, build_tcp_command
+
+# 跨仓硬契约 (与 TriangleBeta EXT_ONLINE 字段 15 对齐):
+# Beta agent 上报 client_type='astar_agent', 它实现了完整的 ACK 协议 (OK\n / ERR|code|message\n)
+# 老 slave 不写 ACK -> 默认仍兼容 (require_ack=False).
+CLIENT_TYPE_ASTAR_AGENT = "astar_agent"
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +39,42 @@ class _TcpCommandFailure(Exception):
 class _TcpSendTask(QRunnable):
     """线程池任务：发送一条 TCP 命令"""
 
-    def __init__(self, ip: str, command_str: str, commander: TcpCommander, *, require_ack: bool = False) -> None:
+    def __init__(
+        self,
+        ip: str,
+        command_str: str,
+        commander: TcpCommander,
+        *,
+        require_ack: bool = False,
+        client_type_resolver: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> None:
         super().__init__()
         self._ip = ip
         self._command_str = command_str
         self._commander = commander
-        self._require_ack = require_ack
+        # 调用方显式要求强 ACK; 即使为 False, _expects_strict_ack() 仍能根据 client_type 提升.
+        self._explicit_require_ack = require_ack
+        self._client_type_resolver = client_type_resolver
         self.setAutoDelete(True)
+
+    def _expects_strict_ack(self) -> bool:
+        """是否强制要求 Agent 返回 ACK (缺失 → 报错重试).
+
+        决策顺序:
+        1. explicit require_ack=True → True (调用方明确要求)
+        2. resolver(ip) == 'astar_agent' → True (Beta agent 必须实现 ACK)
+        3. 其他 (老 slave / 未知 / resolver 异常) → False (向后兼容)
+        """
+        if self._explicit_require_ack:
+            return True
+        if self._client_type_resolver is None:
+            return False
+        try:
+            client_type = self._client_type_resolver(self._ip)
+        except Exception:
+            logger.debug("client_type_resolver 抛异常 (ip=%s), 降级为宽容 ACK 模式", self._ip)
+            return False
+        return client_type == CLIENT_TYPE_ASTAR_AGENT
 
     def run(self) -> None:
         attempts = self._max_attempts()
@@ -105,16 +140,16 @@ class _TcpSendTask(QRunnable):
                 if b"\n" in chunk:
                     break
         except TimeoutError as err:
-            if self._require_ack:
+            if self._expects_strict_ack():
                 raise _TcpCommandFailure("等待 TCP ACK 超时", retryable=True) from err
             return None
         except socket.timeout as err:
-            if self._require_ack:
+            if self._expects_strict_ack():
                 raise _TcpCommandFailure("等待 TCP ACK 超时", retryable=True) from err
             return None
 
         if not chunks:
-            if self._require_ack:
+            if self._expects_strict_ack():
                 raise _TcpCommandFailure("未收到 TCP ACK", retryable=True)
             return None
         return b"".join(chunks).decode("utf-8", errors="replace").strip()
@@ -168,18 +203,37 @@ class TcpCommander(QObject):
         # P1: 限制并发连接数，防止线程爆炸
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(min(32, (os.cpu_count() or 4) * 4))
+        self._client_type_resolver: Optional[Callable[[str], Optional[str]]] = None
+
+    def set_client_type_resolver(
+        self, resolver: Optional[Callable[[str], Optional[str]]]
+    ) -> None:
+        """注入 ip → client_type 查询函数 (例: NodeManager.get_node_by_ip().client_type).
+
+        设置后, send/broadcast 会在节点为 'astar_agent' 时自动启用强 ACK 检查.
+        未设置 → 保持原有行为 (宽容 ACK).
+        """
+        self._client_type_resolver = resolver
 
     def send(self, ip: str, cmd: TcpCommand, payload: str = "", *, require_ack: bool = False) -> None:
         """发送单条 TCP 命令"""
         command_str = build_tcp_command(cmd, payload)
-        task = _TcpSendTask(ip, command_str, self, require_ack=require_ack)
+        task = _TcpSendTask(
+            ip, command_str, self,
+            require_ack=require_ack,
+            client_type_resolver=self._client_type_resolver,
+        )
         self._pool.start(task)
 
     def broadcast(self, ips: list[str], cmd: TcpCommand, payload: str = "", *, require_ack: bool = False) -> None:
         """向多个 IP 广播同一命令"""
         command_str = build_tcp_command(cmd, payload)
         for ip in ips:
-            task = _TcpSendTask(ip, command_str, self, require_ack=require_ack)
+            task = _TcpSendTask(
+                ip, command_str, self,
+                require_ack=require_ack,
+                client_type_resolver=self._client_type_resolver,
+            )
             self._pool.start(task)
 
     def stop(self, timeout_ms: int = 3000) -> None:
