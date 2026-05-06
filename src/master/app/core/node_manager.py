@@ -24,7 +24,7 @@ class NodeManager(QObject):
     node_online = pyqtSignal(str)    # machine_name — 新节点上线
     node_offline = pyqtSignal(str)   # machine_name — 节点离线
     node_status_reported = pyqtSignal(str)  # machine_name — 仅 STATUS 消息触发
-    account_sync_received = pyqtSignal(str, object)  # (machine_name, list[dict]) — 账号同步
+    account_sync_received = pyqtSignal(str, object, int)  # (machine_name, list[dict], outbox_last_id) — 账号同步
     need_account = pyqtSignal(str)  # machine_name — TestDemo 请求新账号
     stats_changed = pyqtSignal()     # 统计数据变化
     history_changed = pyqtSignal()   # 操作历史变化 (M1)
@@ -258,4 +258,4 @@ class NodeManager(QObject):
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return
         if isinstance(accounts, list):
-            self.account_sync_received.emit(msg.machine_name, accounts)
+            self.account_sync_received.emit(msg.machine_name, accounts, msg.sync_last_id)

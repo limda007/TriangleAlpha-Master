@@ -1,8 +1,19 @@
 {
   "servers": {
-    "copilot-enhance-3212": {
+    "context7": {
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest",
+        "--api-key",
+        "ctx7sk-a14c7818-020e-4d60-9a4b-762f6afd9f07"
+      ],
+      "command": "npx",
+      "env": {},
+      "type": "stdio"
+    },
+    "copilot-enhance-3211": {
       "type": "http",
-      "url": "http://127.0.0.1:3212/mcp"
+      "url": "http://127.0.0.1:3211/mcp"
     }
   }
 }

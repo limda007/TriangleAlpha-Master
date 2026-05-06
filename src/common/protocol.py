@@ -101,6 +101,7 @@ class UdpMessage:
     level_threshold: str = ""
     loot_count: str = ""
     sync_payload: str = ""  # ACCOUNT_SYNC: base64 编码的 JSON 账号数组
+    sync_last_id: int = 0   # ACCOUNT_SYNC: BETA agent outbox 末尾 id, 用于 ACCOUNT_SYNC_ACK 回执
     token_key: str = ""     # EXT_ONLINE: slave 端 token.txt 内容
     kami_code: str = ""     # EXT_ONLINE: slave 端 kamis.txt 当前值
     vram_used_mb: int = 0   # GPU 显存已用 (MB)
@@ -153,10 +154,15 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 protocol_version=parts[17] if len(parts) >= 18 else "",
             )
         case "ACCOUNT_SYNC" if len(parts) >= 3 and parts[2]:
+            # 第 4 段可选: BETA agent 提供 outbox 末尾 id, 用于 ACCOUNT_SYNC_ACK 单 ACK 区间删
+            last_id = 0
+            if len(parts) >= 4 and parts[3].isdigit():
+                last_id = int(parts[3])
             return UdpMessage(
                 type=UdpMessageType.ACCOUNT_SYNC,
                 machine_name=parts[1],
                 sync_payload=parts[2],
+                sync_last_id=last_id,
             )
         case "NEED_ACCOUNT" if len(parts) >= 2:
             # P3: 可选第三段为期望数量, 非法/缺失 → 退化为 1
@@ -265,7 +271,14 @@ def build_udp_status(
     return f"STATUS|{machine_name}|{state}|{level}|{jin_bi}|{desc}|{elapsed}|{status_text}"
 
 
-def build_udp_account_sync(machine_name: str, payload_b64: str) -> str:
+def build_udp_account_sync(machine_name: str, payload_b64: str, last_id: int = 0) -> str:
+    """构造 ``ACCOUNT_SYNC|<machine>|<base64>[|<last_id>]``.
+
+    ``last_id`` > 0 时附第 4 段 (BETA agent outbox 末尾 id), master 端落库后会通过
+    ``ACCOUNT_SYNC_ACK|<last_id>`` TCP 回执让 agent 删 outbox. 旧 slave 仍发 3 段, 完全兼容.
+    """
+    if last_id > 0:
+        return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}|{last_id}"
     return f"ACCOUNT_SYNC|{machine_name}|{payload_b64}"
 
 
@@ -300,6 +313,7 @@ class TcpCommand(enum.Enum):
     EXT_SET_GROUP = "EXT_SETGROUP"
     EXT_SET_CONFIG = "EXT_SETCONFIG"
     PUSH_KAMI = "PUSHKAMI"
+    ACCOUNT_SYNC_ACK = "ACCOUNT_SYNC_ACK"  # 与 BETA agent outbox 配套, 回执最后一条已落库 id
 
 
 @dataclass(frozen=True)
@@ -316,9 +330,20 @@ def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
         TcpCommand.UPDATE_SELF,
         TcpCommand.EXT_SET_GROUP, TcpCommand.DELETE_FILE,
         TcpCommand.EXT_SET_CONFIG,
+        TcpCommand.ACCOUNT_SYNC_ACK,
     ) and payload:
         return f"{cmd.value}|{payload}"
     return f"{cmd.value}|"
+
+
+def build_tcp_account_sync_ack(last_id: int) -> str:
+    """构造 ``ACCOUNT_SYNC_ACK|<last_id>`` (与 BETA agent outbox 协议配套).
+
+    BETA agent 收到后会从 outbox 删除所有 id ≤ last_id 的行 (单 ACK 区间删, 幂等).
+    """
+    if last_id <= 0:
+        raise ValueError("last_id 必须为正整数")
+    return f"{TcpCommand.ACCOUNT_SYNC_ACK.value}|{last_id}"
 
 
 def build_tcp_update_txt_append(rel_path: str, content: str) -> str:

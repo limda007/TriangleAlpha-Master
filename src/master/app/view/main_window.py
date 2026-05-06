@@ -368,13 +368,19 @@ class MainWindow(FluentWindow):
             bound_account_cache.pop(machine_name, None)
             self._request_slave_account_cleanup(machine_name)
 
-    def _onAccountSync(self, machine_name: str, accounts: object) -> None:
-        """slave ACCOUNT_SYNC → 同步账号数据 + 封禁检测"""
+    def _onAccountSync(self, machine_name: str, accounts: object, last_id: int = 0) -> None:
+        """slave ACCOUNT_SYNC → 同步账号数据 + 封禁检测.
+
+        BETA agent 提供 last_id (>0) 时, 落库后通过 TCP 发 ACCOUNT_SYNC_ACK 让 agent 删 outbox.
+        旧 slave 不带 last_id (或 =0), 不发 ACK, 完全向后兼容.
+        """
         if not isinstance(accounts, list):
             return
         node = self.nodeManager.nodes.get(machine_name)
         threshold = int(node.level_threshold) if node and node.level_threshold.isdigit() else 0
         self.accountPool.upsert_from_sync(machine_name, accounts, level_threshold=threshold)
+        if last_id > 0 and node is not None:
+            self.tcpCommander.send(node.ip, TcpCommand.ACCOUNT_SYNC_ACK, str(last_id))
 
     def _needs_account_remediation(self, node: NodeInfo) -> bool:
         """根据节点状态判断是否需要补发账号。"""

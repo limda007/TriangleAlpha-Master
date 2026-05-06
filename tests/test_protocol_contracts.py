@@ -130,3 +130,35 @@ class TestUdpProtocolContracts:
         parsed = parse_udp_message(raw)
         # 空 payload 应被拒绝（防止无效同步）
         assert parsed is None
+
+    def test_account_sync_with_last_id_roundtrip(self):
+        """ACCOUNT_SYNC 第 4 段 last_id 双向解析 + ACCOUNT_SYNC_ACK 回执"""
+        payload_b64 = base64.b64encode(b"[]").decode("ascii")
+        raw = build_udp_account_sync("VM-02", payload_b64, last_id=42)
+        assert raw.endswith("|42")
+        parsed = parse_udp_message(raw)
+        assert parsed is not None
+        assert parsed.sync_last_id == 42
+        # ACK build / parse
+        ack_raw = build_tcp_command(TcpCommand.ACCOUNT_SYNC_ACK, "42")
+        assert ack_raw == "ACCOUNT_SYNC_ACK|42"
+        ack_parsed = parse_tcp_command(ack_raw)
+        assert ack_parsed is not None
+        assert ack_parsed.command == TcpCommand.ACCOUNT_SYNC_ACK
+        assert ack_parsed.payload == "42"
+
+    def test_account_sync_legacy_three_segments_compatible(self):
+        """旧 slave 不带 last_id, sync_last_id 默认 0"""
+        payload_b64 = base64.b64encode(b"[]").decode("ascii")
+        raw = build_udp_account_sync("VM-03", payload_b64)
+        parsed = parse_udp_message(raw)
+        assert parsed is not None
+        assert parsed.sync_last_id == 0
+
+    def test_account_sync_invalid_last_id_falls_back_to_zero(self):
+        """非数字 last_id 不破坏解析, 落 0"""
+        payload_b64 = base64.b64encode(b"[]").decode("ascii")
+        raw = f"ACCOUNT_SYNC|VM-04|{payload_b64}|notanint"
+        parsed = parse_udp_message(raw)
+        assert parsed is not None
+        assert parsed.sync_last_id == 0
