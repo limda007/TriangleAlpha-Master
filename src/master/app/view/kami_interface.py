@@ -378,7 +378,7 @@ class KamiInterface(ScrollArea):
         # 分配到节点
         status_item = self.table.item(row, _STATUS_COL)
         status_val = status_item.data(Qt.ItemDataRole.UserRole) if status_item else ""
-        if status_val == "已激活":
+        if status_val in ("已激活", "未使用"):
             menu.addAction(Action(
                 FIF.SEND, "分配到节点",
                 triggered=lambda _checked=False, kid=kami_id: self._assignToNode(kid),
