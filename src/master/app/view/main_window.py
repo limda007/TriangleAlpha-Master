@@ -85,7 +85,10 @@ class MainWindow(FluentWindow):
             self.nodeManager, self.tcpCommander, self.accountPool, self,
             kami_db=self.kamiDB,
         )
-        self.accountInterface = AccountInterface(self.accountPool, self)
+        self.accountInterface = AccountInterface(
+            self.accountPool, self,
+            get_online_machines=lambda: list(self.nodeManager.nodes.keys()),
+        )
         self.kamiInterface = KamiInterface(
             self.kamiDB, self.nodeManager, self.tcpCommander, self,
         )
@@ -127,6 +130,9 @@ class MainWindow(FluentWindow):
 
         # TestDemo NEED_ACCOUNT → 自动分配空闲账号
         self.nodeManager.need_account.connect(self._onNeedAccount)
+
+        # 账号管理页“指定下发给机器”操作
+        self.accountInterface.assign_to_machine_requested.connect(self._onAssignToMachine)
 
         # 定期清理离线节点和追踪字典（每 30 分钟）
         self._purgeTimer = QTimer(self)
@@ -409,6 +415,24 @@ class MainWindow(FluentWindow):
             return
         self._account_retry_sent_at[machine_name] = now
         self._onNeedAccount(machine_name)
+
+    def _onAssignToMachine(self, username: str, machine_name: str) -> None:
+        """账号管理页「指定下发给机器」→ force_assign + TCP UPDATE_TXT 下发。"""
+        node = self.nodeManager.nodes.get(machine_name)
+        if not node:
+            return
+        ok = self.accountPool.force_assign(username, machine_name)
+        if not ok:
+            return
+        acc = self.accountPool.get_account_for_machine(machine_name)
+        if acc is None:
+            return
+        _ensure_bound_account_cache(self)[machine_name] = acc.username
+        node.level = 0
+        node.jin_bi = "0"
+        node.current_account = ""
+        node.game_state = ""
+        self.tcpCommander.send(node.ip, TcpCommand.UPDATE_TXT, acc.to_line())
 
     def _onNeedAccount(self, machine_name: str) -> None:
         """TestDemo NEED_ACCOUNT → 自动分配账号并下发。

@@ -258,6 +258,38 @@ class AccountDB(QObject):
             self.pool_changed.emit()
         return self._row_to_info(row)
 
+    def force_assign(self, username: str, machine_name: str) -> bool:
+        """将指定账号直接绑定到指定机器（状态改为运行中）。
+
+        规则：
+        - 仅允许对状态为 '空闲中' 的账号操作。
+        - 若目标机器已有运行中账号，先释放旧绑定。
+        返回 True 表示绑定成功，False 表示账号不存在或状态不符合。
+        """
+        username = username.strip()
+        machine = machine_name.strip()
+        if not username or not machine:
+            return False
+        changed = False
+        with self._write_transaction():
+            # 先释放目标机器旧绑定（若有）
+            self._conn.execute(
+                "UPDATE accounts SET status='空闲中', assigned_machine='' "
+                "WHERE status='运行中' AND assigned_machine=?",
+                (machine,),
+            )
+            row = self._conn.execute(
+                "UPDATE accounts SET status='运行中', assigned_machine=? "
+                "WHERE username=? AND status='空闲中' "
+                "RETURNING *",
+                (machine, username),
+            ).fetchone()
+            changed = row is not None
+        if changed:
+            self._refresh_counts()
+            self.pool_changed.emit()
+        return changed
+
     def complete(self, machine_name: str, level: int = 0) -> None:
         """运行中 → 已完成"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

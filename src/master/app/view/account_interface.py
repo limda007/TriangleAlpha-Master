@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QTimer
+from collections.abc import Callable
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -62,10 +64,19 @@ _COLUMN_WIDTHS = {
 
 
 class AccountInterface(ScrollArea):
-    def __init__(self, account_pool: AccountDB, parent=None):
+    #: (username, machine_name) — 用户要求将账号强制绑定并下发给机器
+    assign_to_machine_requested = pyqtSignal(str, str)
+
+    def __init__(
+        self,
+        account_pool: AccountDB,
+        parent=None,
+        get_online_machines: Callable[[], list[str]] | None = None,
+    ):
         super().__init__(parent)
         self.setObjectName("accountInterface")
         self._pool = account_pool
+        self._get_online_machines = get_online_machines or (lambda: [])
         self._revealed: set[tuple[int, int]] = set()  # (row, col) with secret revealed
 
         self.view = QWidget(self)
@@ -349,6 +360,21 @@ class AccountInterface(ScrollArea):
             if real_epwd:
                 menu.addAction(Action(FIF.COPY, "复制邮箱密码", triggered=lambda: self._copyToClipboard(real_epwd)))
         menu.addAction(Action(FIF.COPY, "复制整行", triggered=lambda: self._copyFullRow(row)))
+        # 指定下发给机器（单行空闲账号）
+        if count == 1:
+            status_item = self.table.item(row, _STATUS_COL)
+            if status_item and status_item.data(Qt.ItemDataRole.UserRole) == "空闲中":
+                username = acc_item.text() if acc_item else ""
+                online_machines = self._get_online_machines()
+                if username and online_machines:
+                    submenu = RoundMenu("指定下发给机器", parent=self.table)
+                    for mname in online_machines:
+                        _m = mname  # 闭包捕获
+                        _u = username
+                        submenu.addAction(
+                            Action(FIF.SEND, _m, triggered=lambda checked=False, u=_u, m=_m: self.assign_to_machine_requested.emit(u, m))
+                        )
+                    menu.addMenu(submenu)
         menu.addSeparator()
         # 释放绑定（支持多选）
         releasable = self._getReleasableRows()
