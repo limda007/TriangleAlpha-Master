@@ -113,6 +113,16 @@ class TestC5SetConfigPathGuard:
         assert desc == ""
         assert not (tmp_path.parent / "OtherConsole.exe").exists()
 
+    def test_push_sale_cfg_writes_toml(self, tmp_path):
+        handler = self._handler(tmp_path)
+        content = 'enabled = true\nusername = "demo"'
+        payload = base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+        desc = handler._handle_push_sale_cfg(ParsedTcpCommand(TcpCommand.PUSH_SALE_CFG, payload))
+
+        assert desc == "销售平台配置已更新"
+        assert (tmp_path / "sale_config.toml").read_text(encoding="utf-8") == content
+
 
 # ── C6: 进程句柄管理 ──
 
@@ -240,6 +250,7 @@ class TestH7SlaveExtQuery:
         expected = {
             "UPDATE_TXT", "UPDATE_SELF", "START_EXE", "STOP_EXE", "REBOOT_PC",
             "UPDATE_KEY", "DELETE_FILE", "EXT_SET_GROUP", "EXT_SET_CONFIG", "PUSH_KAMI",
+            "PUSH_SALE_CFG", "ACCOUNT_SYNC_ACK",
         }
         slave_required = {m.name for m in TcpCommand} - {"UPDATE_TXT_APPEND"}
         assert slave_required == expected

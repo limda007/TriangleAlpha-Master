@@ -147,6 +147,7 @@ _ACCOUNT_PANEL_COLUMN_WIDTHS = {
     6: 132,
     7: 96,
 }
+_ACTION_PANEL_MIN_WIDTH = 450
 
 _WEAPONS = [
     "G17", "G17_不带药", "QSZ92G", "左轮357",
@@ -253,7 +254,7 @@ class BigScreenInterface(ScrollArea):
         bottom.addWidget(accountPanel, stretch=7)
 
         actionPanel = self._buildActionPanel()
-        actionPanel.setMinimumWidth(320)
+        actionPanel.setMinimumWidth(_ACTION_PANEL_MIN_WIDTH)
         bottom.addWidget(actionPanel, stretch=3)
 
         bottomWidget = QWidget(self)
@@ -2045,9 +2046,10 @@ class BigScreenInterface(ScrollArea):
         legacy_ips: list[str] = []
         modern_ips: list[str] = []
         for node in nodes:
-            if getattr(node, "client_type", "") == "astar_agent":
-                modern_ips.append(node.ip)
-            elif _supports_self_update_hash_payload(getattr(node, "slave_version", "")):
+            if (
+                getattr(node, "client_type", "") == "astar_agent"
+                or _supports_self_update_hash_payload(getattr(node, "slave_version", ""))
+            ):
                 modern_ips.append(node.ip)
             else:
                 legacy_ips.append(node.ip)

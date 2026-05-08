@@ -50,6 +50,8 @@ class UdpMessageType(enum.Enum):
     EXT_ONLINE = "EXT_ONLINE"
     ACCOUNT_SYNC = "ACCOUNT_SYNC"
     NEED_ACCOUNT = "NEED_ACCOUNT"
+    NEED_TOKEN = "NEED_TOKEN"
+    NEED_SALE_CFG = "NEED_SALE_CFG"
 
 
 class GameState:
@@ -163,6 +165,16 @@ def parse_udp_message(raw: str) -> UdpMessage | None:
                 machine_name=parts[1],
                 sync_payload=parts[2],
                 sync_last_id=last_id,
+            )
+        case "NEED_TOKEN" if len(parts) >= 2:
+            return UdpMessage(
+                type=UdpMessageType.NEED_TOKEN,
+                machine_name=parts[1],
+            )
+        case "NEED_SALE_CFG" if len(parts) >= 2:
+            return UdpMessage(
+                type=UdpMessageType.NEED_SALE_CFG,
+                machine_name=parts[1],
             )
         case "NEED_ACCOUNT" if len(parts) >= 2:
             # P3: 可选第三段为期望数量, 非法/缺失 → 退化为 1
@@ -313,6 +325,7 @@ class TcpCommand(enum.Enum):
     EXT_SET_GROUP = "EXT_SETGROUP"
     EXT_SET_CONFIG = "EXT_SETCONFIG"
     PUSH_KAMI = "PUSHKAMI"
+    PUSH_SALE_CFG = "PUSHSALECFG"
     ACCOUNT_SYNC_ACK = "ACCOUNT_SYNC_ACK"  # 与 BETA agent outbox 配套, 回执最后一条已落库 id
 
 
@@ -322,8 +335,18 @@ class ParsedTcpCommand:
     payload: str = ""
 
 
+def build_push_sale_cfg(toml_content: str) -> str:
+    """构建 PUSHSALECFG 命令 (base64 编码 TOML)."""
+    return build_tcp_command(TcpCommand.PUSH_SALE_CFG, toml_content)
+
+
 def build_tcp_command(cmd: TcpCommand, payload: str = "") -> str:
-    if cmd in (TcpCommand.UPDATE_TXT, TcpCommand.UPDATE_KEY, TcpCommand.PUSH_KAMI) and payload:
+    if cmd in (
+        TcpCommand.UPDATE_TXT,
+        TcpCommand.UPDATE_KEY,
+        TcpCommand.PUSH_KAMI,
+        TcpCommand.PUSH_SALE_CFG,
+    ) and payload:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("utf-8")
         return f"{cmd.value}|{encoded}"
     if cmd in (

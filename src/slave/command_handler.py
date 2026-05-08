@@ -173,6 +173,10 @@ class CommandHandler:
                 desc = self._handle_set_config(parsed)
             case TcpCommand.PUSH_KAMI:
                 desc = self._handle_push_kami(parsed)
+            case TcpCommand.PUSH_SALE_CFG:
+                desc = self._handle_push_sale_cfg(parsed)
+            case TcpCommand.ACCOUNT_SYNC_ACK:
+                logger.debug("忽略主控账号同步 ACK: %s", parsed.payload)
 
         if desc and self._on_command:
             self._on_command(desc)
@@ -184,8 +188,8 @@ class CommandHandler:
         except (binascii.Error, UnicodeDecodeError) as err:
             logger.error("UPDATETXT 解码失败: %s", err)
             return ""
-        (self._base_dir / "accounts.txt").write_text(content, encoding="utf-8")
         self._clear_stale_account_runtime_files()
+        (self._base_dir / "accounts.txt").write_text(content, encoding="utf-8")
         count = sum(1 for line in content.splitlines() if line.strip())
         desc = f"账号已更新 ({count}个)"
         logger.info("接收: %s", desc)
@@ -284,6 +288,18 @@ class CommandHandler:
             return ""
         (self._base_dir / "kamis.txt").write_text(content, encoding="utf-8")
         desc = f"卡密已更新: {content[:20]}..."
+        logger.info("接收: %s", desc)
+        return desc
+
+    def _handle_push_sale_cfg(self, parsed: ParsedTcpCommand) -> str:
+        """处理销售平台配置下发指令，写入 sale_config.toml。"""
+        try:
+            content = base64.b64decode(parsed.payload).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as err:
+            logger.error("PUSHSALECFG 解码失败: %s", err)
+            return ""
+        (self._base_dir / "sale_config.toml").write_text(content, encoding="utf-8")
+        desc = "销售平台配置已更新"
         logger.info("接收: %s", desc)
         return desc
 

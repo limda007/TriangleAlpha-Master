@@ -6,9 +6,9 @@ from common.protocol import (
     ACCOUNT_APPEND_WHITELIST,
     TcpCommand,
     UdpMessageType,
+    build_push_sale_cfg,
     build_tcp_command,
     build_tcp_update_txt_append,
-    build_udp_account_sync,
     build_udp_ext_online,
     build_udp_need_account,
     build_udp_online,
@@ -236,6 +236,12 @@ class TestBuildTcp:
         parts = cmd.split("|", 1)
         assert parts[0] == "UPDATEKEY"
         assert base64.b64decode(parts[1]).decode("utf-8") == "MYKEY123"
+
+    def test_push_sale_cfg(self):
+        cmd = build_push_sale_cfg('enabled = true\nusername = "u"')
+        parts = cmd.split("|", 1)
+        assert parts[0] == "PUSHSALECFG"
+        assert base64.b64decode(parts[1]).decode("utf-8") == 'enabled = true\nusername = "u"'
 
 
 class TestParseTcp:
