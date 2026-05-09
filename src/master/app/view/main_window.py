@@ -143,12 +143,12 @@ class MainWindow(FluentWindow):
         self._initPlatformSyncer()
 
     def _initNavigation(self):
-        self.addSubInterface(self.bigscreenInterface, FIF.COMMAND_PROMPT, "大屏模式")
+        self.addSubInterface(self.bigscreenInterface, FIF.TILES, "大屏模式")
         self.navigationInterface.addSeparator()
         self.addSubInterface(self.accountInterface, FIF.PEOPLE, "账号管理", NavigationItemPosition.SCROLL)
-        self.addSubInterface(self.kamiInterface, FIF.LABEL, "卡密管理", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.kamiInterface, FIF.CERTIFICATE, "卡密管理", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.historyInterface, FIF.HISTORY, "操作历史", NavigationItemPosition.SCROLL)
-        self.addSubInterface(self.logInterface, FIF.DOCUMENT, "实时日志", NavigationItemPosition.SCROLL)
+        self.addSubInterface(self.logInterface, FIF.DEVELOPER_TOOLS, "实时日志", NavigationItemPosition.SCROLL)
         self.addSubInterface(self.helpInterface, FIF.HELP, "帮助", NavigationItemPosition.BOTTOM)
         self.addSubInterface(
             self.settingInterface, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM,

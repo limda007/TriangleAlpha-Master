@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStackedWidget,
     QTableWidgetItem,
@@ -27,11 +26,13 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     Action,
+    BodyLabel,
     CaptionLabel,
     CheckBox,
     ComboBox,
     GroupHeaderCardWidget,
     HyperlinkLabel,
+    IconWidget,
     InfoBar,
     InfoBarPosition,
     LineEdit,
@@ -45,6 +46,7 @@ from qfluentwidgets import (
     RoundMenu,
     ScrollArea,
     SpinBox,
+    SubtitleLabel,
     SwitchButton,
     TableWidget,
 )
@@ -235,7 +237,7 @@ class BigScreenInterface(ScrollArea):
         nodeLayout.setSpacing(4)
         filterRow = QHBoxLayout()
         filterRow.addStretch()
-        filterLbl = QLabel("分组筛选:", nodeContainer)
+        filterLbl = BodyLabel("分组筛选:", nodeContainer)
         filterRow.addWidget(filterLbl)
         self._groupCombo = ComboBox(nodeContainer)
         self._groupCombo.addItem("全部")
@@ -250,12 +252,12 @@ class BigScreenInterface(ScrollArea):
         bottom.setSpacing(12)
 
         accountPanel = self._buildAccountPanel()
-        accountPanel.setMinimumWidth(400)
-        bottom.addWidget(accountPanel, stretch=7)
+        accountPanel.setMinimumWidth(300)
+        bottom.addWidget(accountPanel, stretch=6)
 
         actionPanel = self._buildActionPanel()
         actionPanel.setMinimumWidth(_ACTION_PANEL_MIN_WIDTH)
-        bottom.addWidget(actionPanel, stretch=3)
+        bottom.addWidget(actionPanel, stretch=4)
 
         bottomWidget = QWidget(self)
         bottomWidget.setLayout(bottom)
@@ -348,11 +350,11 @@ class BigScreenInterface(ScrollArea):
         layout.setSpacing(12)
 
         # 标题图标
-        icon_lbl = QLabel(bar)
-        icon_lbl.setPixmap(FIF.COMMAND_PROMPT.icon().pixmap(QSize(20, 20)))
-        layout.addWidget(icon_lbl)
+        headerIcon = IconWidget(FIF.COMMAND_PROMPT, bar)
+        headerIcon.setFixedSize(20, 20)
+        layout.addWidget(headerIcon)
 
-        title = QLabel("TriangleAlpha 群控中心", bar)
+        title = SubtitleLabel("TriangleAlpha 群控中心", bar)
         title.setObjectName("headerTitle")
         layout.addWidget(title)
         layout.addStretch()
@@ -379,20 +381,22 @@ class BigScreenInterface(ScrollArea):
         h.setContentsMargins(10, 4, 12, 4)
         h.setSpacing(6)
 
-        icon_lbl = QLabel(badge)
-        icon_lbl.setPixmap(icon.icon().pixmap(QSize(14, 14)))
-        icon_lbl.setObjectName("badgeIcon")
-        h.addWidget(icon_lbl)
+        badgeIcon = IconWidget(icon, badge)
+        badgeIcon.setFixedSize(14, 14)
+        badgeIcon.setObjectName("badgeIcon")
+        h.addWidget(badgeIcon)
 
-        lbl = QLabel(text, badge)
-        lbl.setObjectName("badgeText")
-        h.addWidget(lbl)
+        badgeLbl = BodyLabel(text, badge)
+        badgeLbl.setObjectName("badgeText")
+        h.addWidget(badgeLbl)
 
         return badge
 
     def _setBadgeText(self, badge: QFrame, text: str) -> None:
         """更新徽章文字"""
-        lbl = badge.findChild(QLabel, "badgeText")
+        lbl = badge.findChild(BodyLabel, "badgeText")
+        if lbl is None:
+            lbl = badge.findChild(QLabel, "badgeText")
         if lbl:
             lbl.setText(text)
 
@@ -479,12 +483,11 @@ class BigScreenInterface(ScrollArea):
         # 标题行带图标 + 上传按钮
         titleRow = QHBoxLayout()
         titleRow.setSpacing(6)
-        icon_lbl = QLabel(panel)
-        icon_lbl.setPixmap(FIF.PEOPLE.icon().pixmap(QSize(16, 16)))
-        titleRow.addWidget(icon_lbl)
-        lbl = QLabel("账号池", panel)
-        lbl.setObjectName("panelTitle")
-        titleRow.addWidget(lbl)
+        iconWidget = IconWidget(FIF.PEOPLE, panel)
+        iconWidget.setFixedSize(16, 16)
+        titleRow.addWidget(iconWidget)
+        titleLbl = BodyLabel("账号池", panel)
+        titleRow.addWidget(titleLbl)
         titleRow.addStretch()
         btnUpload = PushButton(FIF.ADD, "上传账号", panel)
         btnUpload.setFixedHeight(28)
@@ -522,7 +525,7 @@ class BigScreenInterface(ScrollArea):
         # 底部: 统计 + 超时监控
         footLayout = QHBoxLayout()
         footLayout.setSpacing(8)
-        self._lblPoolStats = QLabel("总数:0  可用:0  运行中:0  已完成:0", panel)
+        self._lblPoolStats = CaptionLabel("总数:0  可用:0  运行中:0  已完成:0", panel)
         self._lblPoolStats.setObjectName("poolStats")
         footLayout.addWidget(self._lblPoolStats)
         footLayout.addStretch()
@@ -532,10 +535,10 @@ class BigScreenInterface(ScrollArea):
         self.chkWatchdog.stateChanged.connect(self._onWatchdogToggled)
         footLayout.addWidget(self.chkWatchdog)
 
-        lbl2 = QLabel("停滞超过", panel)
+        lbl2 = CaptionLabel("停滞超过", panel)
         footLayout.addWidget(lbl2)
 
-        self.spinTimeout = QSpinBox(panel)
+        self.spinTimeout = SpinBox(panel)
         self.spinTimeout.setRange(1, 120)
         self.spinTimeout.setValue(15)
         self.spinTimeout.setSuffix(" 分钟")
@@ -651,9 +654,15 @@ class BigScreenInterface(ScrollArea):
         self._actionPivot.setCurrentItem(widget.objectName())
 
     def _buildConfigPage(self) -> QWidget:
-        """配置页：使用 GroupHeaderCardWidget"""
+        """配置页：ScrollArea 应对分屏高度不足"""
+        scroll = ScrollArea()
+        scroll.setStyleSheet("QScrollArea{background: transparent; border: none}")
+        scroll.viewport().setStyleSheet("background: transparent")
+        scroll.setObjectName("cfgPage")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         cfgPage = QWidget()
-        cfgPage.setObjectName("cfgPage")
         cfgLayout = QVBoxLayout(cfgPage)
         cfgLayout.setContentsMargins(0, 6, 0, 0)
         cfgLayout.setSpacing(10)
@@ -665,25 +674,21 @@ class BigScreenInterface(ScrollArea):
         self._cfgTeammate = ComboBox(cfgPage)
         self._cfgTeammate.addItems(["开启", "关闭"])
         self._cfgTeammate.setCurrentText(_DEFAULT_TEAMMATE_TEXT)
-        self._cfgTeammate.setFixedWidth(120)
         card.addGroup(FIF.PEOPLE, "补齐队友", "是否自动补满队伍", self._cfgTeammate)
 
         self._cfgWeapon = ComboBox(cfgPage)
         self._cfgWeapon.addItems(_WEAPONS)
         self._cfgWeapon.setCurrentText(_DEFAULT_WEAPON)
-        self._cfgWeapon.setFixedWidth(160)
         card.addGroup(FIF.GAME, "武器配置", "推送武器模板到节点", self._cfgWeapon)
 
         self._cfgLevel = SpinBox(cfgPage)
         self._cfgLevel.setRange(1, 50)
         self._cfgLevel.setValue(_DEFAULT_LEVEL)
-        self._cfgLevel.setFixedWidth(120)
         card.addGroup(FIF.FLAG, "下号等级", "达标后自动换号", self._cfgLevel)
 
         self._cfgLoot = SpinBox(cfgPage)
         self._cfgLoot.setRange(0, 999)
         self._cfgLoot.setValue(_DEFAULT_LOOT)
-        self._cfgLoot.setFixedWidth(160)
         group = card.addGroup(FIF.SHOPPING_CART, "舔包次数", "每局舔包上限", self._cfgLoot)
         group.setSeparatorVisible(True)
 
@@ -692,6 +697,7 @@ class BigScreenInterface(ScrollArea):
         bottomLayout.setContentsMargins(24, 15, 24, 20)
         bottomLayout.setSpacing(10)
         hintLabel = CaptionLabel("选中节点自动回填，未选中时作用全部在线节点")
+        hintLabel.setWordWrap(True)
         bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
         bottomLayout.addStretch(1)
         btnPush = PrimaryPushButton(FIF.SYNC, "下发配置")
@@ -704,12 +710,19 @@ class BigScreenInterface(ScrollArea):
         cfgLayout.addWidget(card)
         cfgLayout.addStretch()
 
-        return cfgPage
+        scroll.setWidget(cfgPage)
+        return scroll
 
     def _buildTokenPage(self) -> QWidget:
-        """验证码页：API Key 输入 + 余额查询 + 持久化 + 一键下发到 token.txt"""
+        """验证码页：ScrollArea 应对分屏高度不足"""
+        scroll = ScrollArea()
+        scroll.setStyleSheet("QScrollArea{background: transparent; border: none}")
+        scroll.viewport().setStyleSheet("background: transparent")
+        scroll.setObjectName("tokenPage")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         page = QWidget()
-        page.setObjectName("tokenPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(10)
@@ -728,7 +741,6 @@ class BigScreenInterface(ScrollArea):
         self._tokenInput = LineEdit(page)
         self._tokenInput.setPlaceholderText("粘贴你的 API Key")
         self._tokenInput.setClearButtonEnabled(True)
-        self._tokenInput.setFixedWidth(220)
         # 从配置加载已保存的 Key
         saved_key = self._pool.get_config("api_key")
         if saved_key:
@@ -775,6 +787,7 @@ class BigScreenInterface(ScrollArea):
         bottomLayout.setContentsMargins(24, 15, 24, 20)
         bottomLayout.setSpacing(10)
         hintLabel = CaptionLabel("保存后下发到选中/全部在线节点的 token.txt")
+        hintLabel.setWordWrap(True)
         bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
         bottomLayout.addStretch(1)
 
@@ -798,12 +811,19 @@ class BigScreenInterface(ScrollArea):
         if saved_key:
             QTimer.singleShot(500, self._queryBalance)
 
-        return page
+        scroll.setWidget(page)
+        return scroll
 
     def _buildPlatformPage(self) -> QWidget:
-        """销售平台页：启用开关 + 用户名密码 + 连接状态 + 同步统计"""
+        """销售平台页：ScrollArea 应对分屏高度不足"""
+        scroll = ScrollArea()
+        scroll.setStyleSheet("QScrollArea{background: transparent; border: none}")
+        scroll.viewport().setStyleSheet("background: transparent")
+        scroll.setObjectName("platformPage")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         page = QWidget()
-        page.setObjectName("platformPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(10)
@@ -821,14 +841,12 @@ class BigScreenInterface(ScrollArea):
         self._platUsername = LineEdit(page)
         self._platUsername.setPlaceholderText("平台用户名")
         self._platUsername.setClearButtonEnabled(True)
-        self._platUsername.setFixedWidth(200)
         self._platUsername.setText(cfg.get(cfg.platformUsername))
         card.addGroup(FIF.PEOPLE, "用户名", "平台登录用户名", self._platUsername)
 
         # 密码
         self._platPassword = PasswordLineEdit(page)
         self._platPassword.setPlaceholderText("平台密码")
-        self._platPassword.setFixedWidth(200)
         self._platPassword.setText(cfg.get(cfg.platformPassword))
         group = card.addGroup(FIF.FINGERPRINT, "密码", "平台登录密码", self._platPassword)
         group.setSeparatorVisible(True)
@@ -865,6 +883,7 @@ class BigScreenInterface(ScrollArea):
         bottomLayout.setContentsMargins(24, 15, 24, 20)
         bottomLayout.setSpacing(10)
         hintLabel = CaptionLabel("保存后自动连接平台")
+        hintLabel.setWordWrap(True)
         bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
         bottomLayout.addStretch(1)
         btnSave = PrimaryPushButton(FIF.SAVE, "保存")
@@ -876,7 +895,8 @@ class BigScreenInterface(ScrollArea):
         layout.addWidget(card)
         layout.addStretch()
 
-        return page
+        scroll.setWidget(page)
+        return scroll
 
     def _savePlatformConfig(self) -> None:
         """保存平台配置到 cfg 并触发重连"""
