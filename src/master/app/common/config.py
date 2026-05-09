@@ -51,6 +51,9 @@ class AppConfig(QConfig):
     platformPassword = ConfigItem("Platform", "Password", "", None)
     platformGroupName = ConfigItem("Platform", "GroupName", "", None)
 
+    # 验证码打码 API Token
+    captchaKey = ConfigItem("Captcha", "Key", "", None)
+
     # ── 中控发现 (机房多客户租户隔离) ────────────────────────
     # tenantId 非空 → 仅响应 / 接受同租户的 agent / master.
     # strictTenant=True → 拒绝任意一端为空的混合配置, 防误绑.

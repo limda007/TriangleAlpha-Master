@@ -83,7 +83,7 @@ class GameState:
                 return ""
 
 
-@dataclass
+@dataclass(slots=True)
 class UdpMessage:
     type: UdpMessageType
     machine_name: str = ""

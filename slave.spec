@@ -103,7 +103,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'qfluentwidgets'],
+    excludes=['tkinter', 'matplotlib', 'qfluentwidgets', 'tornado', 'sqlalchemy', 'flask'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -115,16 +115,16 @@ if sys.platform == 'darwin':
         exclude_binaries=True,
         name='TriangleAlpha-Slave',
         debug=False,
-        strip=False,
-        upx=False,
+        strip=True,
+        upx=True,
         console=False,
     )
     coll = COLLECT(
         exe,
         a.binaries,
         a.datas,
-        strip=False,
-        upx=False,
+        strip=True,
+        upx=True,
         upx_exclude=[],
         name='TriangleAlpha-Slave',
     )
@@ -138,6 +138,6 @@ else:
     exe = EXE(
         pyz, a.scripts, a.binaries, a.datas, [],
         name='TriangleAlpha-Slave',
-        debug=False, strip=False, upx=False,
+        debug=False, strip=False, upx=True,
         console=False,
     )

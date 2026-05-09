@@ -15,10 +15,17 @@ VM_DEPLOY_DIR ?= C:/Users/Administrator/Desktop/TriangleAlphaOOOOO
 VM_BUILD_DIR ?= $(VM_DEPLOY_DIR)/_build
 VM_PYTHON ?= C:\\Python312\\python.exe
 
+# Mutagen 远程构建配置（源码由 mutagen.yml 同步到该目录）
+MUTAGEN_HOST ?= administrator@192.168.1.50
+MUTAGEN_REPO ?= D:/Code/TriangleAlpha-Master
+MUTAGEN_UV ?= uv
+MUTAGEN_PYPI_INDEX ?= https://pypi.tuna.tsinghua.edu.cn/simple
+
 .PHONY: help deps sync lint fmt typecheck test check \
 	run run-master run-slave \
 	package package-master package-slave \
 	deploy-master deploy-slave \
+	build-in-mutagen build-in-mutagen-fast \
 	clean
 
 deps: ## 安装 uv（未安装时）
@@ -57,6 +64,40 @@ package-master: sync ## 打包主控端
 
 package-slave: sync ## 打包被控端
 	PYTHONPATH=$(PYTHONPATH) $(UV) run pyinstaller --clean --noconfirm $(SLAVE_SPEC)
+
+_mutagen-uv-sync: ## 仅在 uv.lock 变化时同步远程依赖
+	@LOCAL_SIZE=$$(wc -c < uv.lock 2>/dev/null || echo 0); \
+	REMOTE_SIZE=$$(ssh $(MUTAGEN_HOST) "cmd /c \"for %f in ($(MUTAGEN_REPO)\\uv.lock) do @echo %~zf\"" 2>/dev/null); \
+	if [ "$$REMOTE_SIZE" != "$$LOCAL_SIZE" ]; then \
+		echo ">>> 依赖已变更，重新同步..."; \
+		ssh $(MUTAGEN_HOST) "cmd /c set UV_LINK_MODE=copy&& cd /d $(MUTAGEN_REPO) && $(MUTAGEN_UV) sync --group dev --default-index $(MUTAGEN_PYPI_INDEX)"; \
+	else \
+		echo ">>> 依赖未变更，跳过 uv sync"; \
+	fi
+
+build-in-mutagen: ## 通过 Mutagen 同步后 SSH 到远程只构建 Master
+	@echo ">>> 刷新 Mutagen 同步..."
+	@if ! mutagen project flush >/dev/null 2>&1; then \
+		echo ">>> Mutagen 会话未启动，正在启动..."; \
+		mutagen project start; \
+		mutagen project flush; \
+	fi
+	@$(MAKE) _mutagen-uv-sync
+	@echo ">>> 在 $(MUTAGEN_HOST):$(MUTAGEN_REPO) 构建 Master..."
+	ssh $(MUTAGEN_HOST) "cmd /c set UV_LINK_MODE=copy&& cd /d $(MUTAGEN_REPO) && $(MUTAGEN_UV) run pyinstaller --clean --noconfirm $(MASTER_SPEC)"
+	@echo ">>> Master 构建完成: $(MUTAGEN_REPO)/dist/TriangleAlpha-Master.exe"
+
+build-in-mutagen-fast: ## 增量构建（跳过 --clean，更快）
+	@echo ">>> 刷新 Mutagen 同步..."
+	@if ! mutagen project flush >/dev/null 2>&1; then \
+		echo ">>> Mutagen 会话未启动，正在启动..."; \
+		mutagen project start; \
+		mutagen project flush; \
+	fi
+	@$(MAKE) _mutagen-uv-sync
+	@echo ">>> 增量构建 Master..."
+	ssh $(MUTAGEN_HOST) "cmd /c set UV_LINK_MODE=copy&& cd /d $(MUTAGEN_REPO) && $(MUTAGEN_UV) run pyinstaller --noconfirm $(MASTER_SPEC)"
+	@echo ">>> Master 增量构建完成: $(MUTAGEN_REPO)/dist/TriangleAlpha-Master.exe"
 
 deploy-slave: ## 构建并部署被控端到 VM（生产版，无控制台）
 	@echo ">>> 上传源码到 VM..."

@@ -254,7 +254,7 @@ class AccountDB(QObject):
             return None
         self._release_block_discard(machine, row["username"])
         if changed:
-            self._refresh_counts()
+            self._xfer_count("空闲中", "运行中")
             self.pool_changed.emit()
         return self._row_to_info(row)
 
@@ -293,13 +293,14 @@ class AccountDB(QObject):
     def complete(self, machine_name: str, level: int = 0) -> None:
         """运行中 → 已完成"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._conn.execute(
+        cur = self._conn.execute(
             "UPDATE accounts SET status='已完成', level=?, completed_at=? "
             "WHERE status='运行中' AND assigned_machine=?",
             (level, now, machine_name),
         )
         self._conn.commit()
-        self._refresh_counts()
+        for _ in range(max(0, cur.rowcount)):
+            self._xfer_count("运行中", "已完成")
         self.pool_changed.emit()
 
     def release(self, machine_name: str) -> None:
@@ -321,7 +322,7 @@ class AccountDB(QObject):
             )
         for row in rows:
             self._release_block_add(machine, row["username"])
-        self._refresh_counts()
+            self._xfer_count("运行中", "空闲中")
         self.pool_changed.emit()
 
     def update_from_status(
@@ -810,6 +811,32 @@ class AccountDB(QObject):
         self._available = counts.get("空闲中", 0)
         self._in_use = counts.get("运行中", 0)
         self._completed = counts.get("已完成", 0)
+
+    # 增量计数：热路径直接维护 _total/_available/_in_use/_completed，避免 SQL GROUP BY。
+    # 假设：所有调用均在 Qt 主线程，不跨线程并发。若未来多线程化，需加 RLock 保护。
+    def _inc_count(self, status: str) -> None:
+        self._total += 1
+        if status == "空闲中":
+            self._available += 1
+        elif status == "运行中":
+            self._in_use += 1
+        elif status == "已完成":
+            self._completed += 1
+
+    def _dec_count(self, status: str) -> None:
+        self._total = max(0, self._total - 1)
+        if status == "空闲中":
+            self._available = max(0, self._available - 1)
+        elif status == "运行中":
+            self._in_use = max(0, self._in_use - 1)
+        elif status == "已完成":
+            self._completed = max(0, self._completed - 1)
+
+    def _xfer_count(self, old: str, new: str) -> None:
+        if old == new:
+            return
+        self._dec_count(old)
+        self._inc_count(new)
 
     @staticmethod
     def _normalize_timestamp_text(raw: object) -> str:

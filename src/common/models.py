@@ -18,7 +18,7 @@ class AccountStatus(enum.Enum):
     DELETED = "已删除"
 
 
-@dataclass
+@dataclass(slots=True)
 class NodeInfo:
     machine_name: str
     ip: str
@@ -52,7 +52,7 @@ class NodeInfo:
         return (datetime.now() - self.last_seen).total_seconds() < timeout_sec
 
 
-@dataclass
+@dataclass(slots=True)
 class AccountInfo:
     """账号信息 — 对齐原版 TestDemo.exe 的 AccountInfo 结构
 

@@ -651,13 +651,9 @@ class BigScreenInterface(ScrollArea):
         self._actionPivot.setCurrentItem(widget.objectName())
 
     def _buildConfigPage(self) -> QWidget:
-        """配置页：使用 GroupHeaderCardWidget，外套 ScrollArea 防止高度不足时裁切"""
-        scroll = ScrollArea()
-        scroll.setObjectName("cfgPage")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
+        """配置页：使用 GroupHeaderCardWidget"""
         cfgPage = QWidget()
+        cfgPage.setObjectName("cfgPage")
         cfgLayout = QVBoxLayout(cfgPage)
         cfgLayout.setContentsMargins(0, 6, 0, 0)
         cfgLayout.setSpacing(10)
@@ -708,18 +704,12 @@ class BigScreenInterface(ScrollArea):
         cfgLayout.addWidget(card)
         cfgLayout.addStretch()
 
-        scroll.setWidget(cfgPage)
-        return scroll
+        return cfgPage
 
     def _buildTokenPage(self) -> QWidget:
         """验证码页：API Key 输入 + 余额查询 + 持久化 + 一键下发到 token.txt"""
-        scroll = ScrollArea()
-        scroll.setObjectName("tokenPage")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
         page = QWidget()
-        page.setObjectName("_tokenPageInner")
+        page.setObjectName("tokenPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(10)
@@ -808,18 +798,12 @@ class BigScreenInterface(ScrollArea):
         if saved_key:
             QTimer.singleShot(500, self._queryBalance)
 
-        scroll.setWidget(page)
-        return scroll
+        return page
 
     def _buildPlatformPage(self) -> QWidget:
         """销售平台页：启用开关 + 用户名密码 + 连接状态 + 同步统计"""
-        scroll = ScrollArea()
-        scroll.setObjectName("platformPage")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
         page = QWidget()
-        page.setObjectName("_platformPageInner")
+        page.setObjectName("platformPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(10)
@@ -892,8 +876,7 @@ class BigScreenInterface(ScrollArea):
         layout.addWidget(card)
         layout.addStretch()
 
-        scroll.setWidget(page)
-        return scroll
+        return page
 
     def _savePlatformConfig(self) -> None:
         """保存平台配置到 cfg 并触发重连"""
@@ -934,7 +917,8 @@ class BigScreenInterface(ScrollArea):
             )
             return
         self._pool.set_config("api_key", key)
-        self._cached_api_key = key  # 同步缓存
+        self._cached_api_key = key
+        cfg.captchaKey.value = key  # 同步缓存
         InfoBar.success(
             "已保存", "API Key 已保存到本地配置",
             parent=self, position=InfoBarPosition.TOP, duration=2000,
@@ -953,7 +937,8 @@ class BigScreenInterface(ScrollArea):
             return
         # 先保存到本地
         self._pool.set_config("api_key", key)
-        self._cached_api_key = key  # 同步缓存
+        self._cached_api_key = key
+        cfg.captchaKey.value = key  # 同步缓存
         # 再下发到节点
         ips, selected = self._getTargetIPs()
         if not ips:

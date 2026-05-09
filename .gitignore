@@ -21,3 +21,6 @@ accounts.db-wal
 master.log
 master.log.*
 crash.log
+# Mutagen project lock
+mutagen.yml.lock
+mutagen.yaml.lock

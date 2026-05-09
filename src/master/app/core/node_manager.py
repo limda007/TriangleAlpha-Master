@@ -29,8 +29,9 @@ class NodeManager(QObject):
     stats_changed = pyqtSignal()     # 统计数据变化
     history_changed = pyqtSignal()   # 操作历史变化 (M1)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, *, cfg=None) -> None:
         super().__init__(parent)
+        self._cfg = cfg
         self.nodes: dict[str, NodeInfo] = {}
         self.history: deque[OperationRecord] = deque(maxlen=_MAX_HISTORY)
         # P0: 缓存在线/总数，避免每次遍历
@@ -222,6 +223,8 @@ class NodeManager(QObject):
             self.nodes[name] = NodeInfo(machine_name=name, ip=remote_ip)
             self.node_online.emit(name)
         node = self.nodes[name]
+        if node.ip != remote_ip:
+            node.ip = remote_ip
         # 写入 game_state 而非 status（status 由心跳和超时管理）
         if state == GameState.SCRIPT_STOPPED:
             node.game_state = ""
