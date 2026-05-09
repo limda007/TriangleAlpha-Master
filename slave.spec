@@ -125,7 +125,7 @@ if sys.platform == 'darwin':
         a.datas,
         strip=True,
         upx=True,
-        upx_exclude=[],
+        upx_exclude=['python3.dll', 'python313.dll'],
         name='TriangleAlpha-Slave',
     )
     app = BUNDLE(
@@ -139,5 +139,6 @@ else:
         pyz, a.scripts, a.binaries, a.datas, [],
         name='TriangleAlpha-Slave',
         debug=False, strip=False, upx=True,
+        upx_exclude=['python3.dll', 'python313.dll'],
         console=False,
     )
